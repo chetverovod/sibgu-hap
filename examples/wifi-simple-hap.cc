@@ -98,11 +98,12 @@ main(int argc, char* argv[])
     std::string phyMode("DsssRate1Mbps");
     uint32_t packetSize{1000}; // bytes
     uint32_t numPackets{1};
-    Time interPacketInterval{"10ms"};
+    Time interPacketInterval{"40ms"};
     bool verbose{false};
     // Этим параметром будем менять расстояние между приемником
     // и передатчиком (узлами сети).
     double distance{100.0}; // метры
+    double Pdbm{20}; // Мощность передатчика.  
 
     // Определяе аргументы командной строки и связанные с ними переменные.
     CommandLine cmd(__FILE__);
@@ -112,6 +113,7 @@ main(int argc, char* argv[])
     cmd.AddValue("interval", "interval between packets", interPacketInterval);
     cmd.AddValue("verbose", "turn on all WifiNetDevice log components", verbose);
     cmd.AddValue("distance", "Distance between nodes (m)", distance);
+    cmd.AddValue("txPower", "Power of transmitter, (dBm)", Pdbm);
     cmd.Parse(argc, argv);
 
     // Fix non-unicast data rate to be the same as that of unicast
@@ -132,6 +134,14 @@ main(int argc, char* argv[])
     // This is one parameter that matters when using FixedRssLossModel
     // set it to zero; otherwise, gain will be added
     wifiPhy.Set("RxGain", DoubleValue(0));
+
+    // Усиление антенн (помогает пробить 20 км)
+  //  wifiPhy.Set ("TxGain", DoubleValue (20.0));
+  //  wifiPhy.Set ("RxGain", DoubleValue (20.0));
+
+    // Стандартная мощность 20 dBm (100 мВт)
+    wifiPhy.Set ("TxPowerStart", DoubleValue (Pdbm));
+    wifiPhy.Set ("TxPowerEnd", DoubleValue (Pdbm));
 
     // ns-3 supports RadioTap and Prism tracing extensions for 802.11b
     wifiPhy.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
@@ -186,7 +196,7 @@ main(int argc, char* argv[])
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
-    positionAlloc->Add(Vector(distance, 0.0, 0.0));
+    positionAlloc->Add(Vector(0.0, 0.0, distance));
     mobility.SetPositionAllocator(positionAlloc);
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobility.Install(c);
@@ -216,14 +226,14 @@ main(int argc, char* argv[])
     InetSocketAddress remote = InetSocketAddress(i.GetAddress(0), 80);
 
     // Для unicast флаг SetAllowBroadcast не обязателен, но и не мешает
-    source->SetAllowBroadcast(true);
+  //  source->SetAllowBroadcast(true);
     source->Connect(remote);
 
     // Tracing
-    wifiPhy.EnablePcap("wifi-simple-adhoc", devices);
+    wifiPhy.EnablePcap("wifi-simple-hap", devices);
 
     // Output what we are doing
-    NS_LOG_UNCOND("Testing " << numPackets << " packets sent by HAP on distance  " << distance << " m");
+    NS_LOG_UNCOND("Testing " << numPackets << " packets sent by HAP on distance " << distance << " m");
 
     Simulator::ScheduleWithContext(source->GetNode()->GetId(),
             Seconds(1.0),
@@ -238,7 +248,7 @@ main(int argc, char* argv[])
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll ();
 
-    Simulator::Stop (Seconds (11.0));
+    Simulator::Stop (Seconds (44.0));
     Simulator::Run();
 
     // 7. Сбор статистики
@@ -247,6 +257,7 @@ main(int argc, char* argv[])
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats ();
 
     std::cout << "\n\n--- РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ---\n";
+    std::cout << "  Мощность передатчика: " << Pdbm << " dBm\n";
     std::cout << "  Расстояние приемник-передатчик: " << distance << " м\n";
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin (); i != stats.end (); ++i)
     {
