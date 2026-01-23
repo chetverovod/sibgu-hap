@@ -18,11 +18,6 @@
 //
 // For instance, for this configuration, the physical layer will
 // stop successfully receiving packets when rss drops below -97 dBm.
-// To see this effect, try running:
-//
-// ./ns3 run "wifi-simple-adhoc --rss=-97 --numPackets=20"
-// ./ns3 run "wifi-simple-adhoc --rss=-98 --numPackets=20"
-// ./ns3 run "wifi-simple-adhoc --rss=-99 --numPackets=20"
 //
 // Note that all ns-3 attributes (not just the ones exposed in the below
 // script) can be changed at command line; see the documentation.
@@ -65,7 +60,7 @@ ReceivePacket(Ptr<Socket> socket)
 {
     while (socket->Recv())
     {
-        // Закоментируем, Чтоб не замусоривать вывод в консоль
+        // Закоментируем, Чтоб не замусоривать вывод в консоль.
         //NS_LOG_UNCOND("Received one packet!");
     }
 }
@@ -101,17 +96,17 @@ GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize, uint32_t pktCount, Time pk
 main(int argc, char* argv[])
 {
     std::string phyMode("DsssRate1Mbps");
-    dBm_u rss{-80};
     uint32_t packetSize{1000}; // bytes
     uint32_t numPackets{1};
-    // Time interPacketInterval{"1s"};
     Time interPacketInterval{"10ms"};
     bool verbose{false};
+    // Этим параметром будем менять расстояние между приемником
+    // и передатчиком (узлами сети).
     double distance{100.0}; // метры
 
+    // Определяе аргументы командной строки и связанные с ними переменные.
     CommandLine cmd(__FILE__);
     cmd.AddValue("phyMode", "Wifi Phy mode", phyMode);
-    //cmd.AddValue("rss", "received signal strength", rss);
     cmd.AddValue("packetSize", "size of application packet sent", packetSize);
     cmd.AddValue("numPackets", "number of packets generated", numPackets);
     cmd.AddValue("interval", "interval between packets", interPacketInterval);
@@ -144,9 +139,6 @@ main(int argc, char* argv[])
     YansWifiChannelHelper wifiChannel;
     wifiChannel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
 
-    // The below FixedRssLossModel will cause the rss to be fixed regardless
-    // of the distance between the two stations, and the transmit power
-    // wifiChannel.AddPropagationLoss("ns3::FixedRssLossModel", "Rss", DoubleValue(rss));
 
     // Используем Friis (прямая видимость) и частоту 2.4 ГГц (стандарт для 802.11b)
     //  wifiChannel.AddPropagationLoss ("ns3::FriisPropagationLossModel", 
@@ -165,7 +157,10 @@ main(int argc, char* argv[])
 
     // 2. ДОБАВЛЯЕМ СЛУЧАЙНОСТЬ (Замирания Nakagami)
     // Эта модель добавит случайные колебания мощности сигнала.
-    // m0=1.0 означает сильные колебания (Rayleigh fading), что дает красивую "ступенчатую" кривую потерь.
+    // m0=1.0 означает сильные колебания (Rayleigh fading), что дает красивую
+    // "ступенчатую" кривую потерь.
+    // Без этой добавки переход от состояния "Ни одного пакета не потеряно" до
+    // сотояния "Все пакеты потеряны" происходит при увеличении расстояния на 1см.
     wifiChannel.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
             "m0", DoubleValue(1.0), 
             "m1", DoubleValue(1.0),
@@ -180,15 +175,17 @@ main(int argc, char* argv[])
             StringValue(phyMode),
             "ControlMode",
             StringValue(phyMode));
+
     // Set it to adhoc mode
     wifiMac.SetType("ns3::AdhocWifiMac");
     NetDeviceContainer devices = wifi.Install(wifiPhy, wifiMac, c);
 
 
+    // Поскольку передатчик и приемник неподвижны, модель подвижности
+    // узлов выбираем неподвижную.
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
-    //positionAlloc->Add(Vector(5.0, 0.0, 0.0));
     positionAlloc->Add(Vector(distance, 0.0, 0.0));
     mobility.SetPositionAllocator(positionAlloc);
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -214,7 +211,8 @@ main(int argc, char* argv[])
     //InetSocketAddress remote = InetSocketAddress(Ipv4Address("255.255.255.255"), 80);
 
     // Чтобы flowmonitor  мог нормально работать
-    // ИСПРАВЛЕНИЕ: Используем конкретный адрес получателя (Node 0), а не broadcast
+    // используем конкретный адрес получателя (Node 0), а не broadcast.
+    // Иначе он не сможет различать потоки данных.
     InetSocketAddress remote = InetSocketAddress(i.GetAddress(0), 80);
 
     // Для unicast флаг SetAllowBroadcast не обязателен, но и не мешает
@@ -225,7 +223,7 @@ main(int argc, char* argv[])
     wifiPhy.EnablePcap("wifi-simple-adhoc", devices);
 
     // Output what we are doing
-    NS_LOG_UNCOND("Testing " << numPackets << " packets sent with receiver rss " << rss);
+    NS_LOG_UNCOND("Testing " << numPackets << " packets sent by HAP on distance  " << distance << " m");
 
     Simulator::ScheduleWithContext(source->GetNode()->GetId(),
             Seconds(1.0),
@@ -249,6 +247,7 @@ main(int argc, char* argv[])
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats ();
 
     std::cout << "\n\n--- РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ---\n";
+    std::cout << "  Расстояние приемник-передатчик: " << distance << " м\n";
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin (); i != stats.end (); ++i)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (i->first);
