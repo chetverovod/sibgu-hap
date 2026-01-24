@@ -7,13 +7,12 @@
 // This script based on ns-3.43/examples/wireless/wifi-simple-adhoc.cc
 // It configures two nodes on an 802.11b physical layer, with
 // 802.11b NICs in adhoc mode, and by default, sends one packet of 1000
-// (application) bytes to the other node.  The physical layer is configured
-// to receive at a fixed RSS (regardless of the distance and transmit
-// power); therefore, changing position of the nodes has no effect.
+// (application) bytes to the other node. 
 //
 // There are a number of command-line options available to control
 // the default behavior.  The list of available command-line options
 // can be listed with the following command:
+//
 // ./ns3 run "wifi-simple-adhoc --help"
 //
 // For instance, for this configuration, the physical layer will
@@ -25,12 +24,12 @@
 // This script can also be helpful to put the Wifi layer into verbose
 // logging mode; this command will turn on all wifi logging:
 //
-// ./ns3 run "wifi-simple-adhoc --verbose=1"
+// ./ns3 run "wifi-simple-hap --verbose=1"
 //
 // When you are done, you will notice two pcap trace files in your directory.
 // If you have tcpdump installed, you can try this:
 //
-// tcpdump -r wifi-simple-adhoc-0-0.pcap -nn -tt
+// tcpdump -r wifi-simple-hap-0-0.pcap -nn -tt
 //
 
 #include "ns3/flow-monitor-module.h"
@@ -100,20 +99,23 @@ main(int argc, char* argv[])
     uint32_t numPackets{1};
     Time interPacketInterval{"40ms"};
     bool verbose{false};
+
     // Этим параметром будем менять расстояние между приемником
     // и передатчиком (узлами сети).
-    double distance{100.0}; // метры
-    double Pdbm{20}; // Мощность передатчика.  
+    double hight{100.0}; // метры
+    double Pdbm{20.}; // Мощность передатчика.  
+    double antGain{0.}; // Коэффициент усиления антенны передатчика и антенны приемника.  
 
-    // Определяе аргументы командной строки и связанные с ними переменные.
+    // Определяем аргументы командной строки и связанные с ними переменные.
     CommandLine cmd(__FILE__);
     cmd.AddValue("phyMode", "Wifi Phy mode", phyMode);
     cmd.AddValue("packetSize", "size of application packet sent", packetSize);
     cmd.AddValue("numPackets", "number of packets generated", numPackets);
     cmd.AddValue("interval", "interval between packets", interPacketInterval);
     cmd.AddValue("verbose", "turn on all WifiNetDevice log components", verbose);
-    cmd.AddValue("distance", "Distance between nodes (m)", distance);
+    cmd.AddValue("hight", "Distance between nodes (m)", hight);
     cmd.AddValue("txPower", "Power of transmitter, (dBm)", Pdbm);
+    cmd.AddValue("antGain", "Antenna gain for transmitter and reciever, (dB)", antGain);
     cmd.Parse(argc, argv);
 
     // Fix non-unicast data rate to be the same as that of unicast
@@ -131,13 +133,10 @@ main(int argc, char* argv[])
     wifi.SetStandard(WIFI_STANDARD_80211b);
 
     YansWifiPhyHelper wifiPhy;
-    // This is one parameter that matters when using FixedRssLossModel
-    // set it to zero; otherwise, gain will be added
-    wifiPhy.Set("RxGain", DoubleValue(0));
 
-    // Усиление антенн (помогает пробить 20 км)
-  //  wifiPhy.Set ("TxGain", DoubleValue (20.0));
-  //  wifiPhy.Set ("RxGain", DoubleValue (20.0));
+    // Усиление антенн
+    wifiPhy.Set ("TxGain", DoubleValue (antGain));
+    wifiPhy.Set ("RxGain", DoubleValue (antGain));
 
     // Стандартная мощность 20 dBm (100 мВт)
     wifiPhy.Set ("TxPowerStart", DoubleValue (Pdbm));
@@ -154,16 +153,17 @@ main(int argc, char* argv[])
     //  wifiChannel.AddPropagationLoss ("ns3::FriisPropagationLossModel", 
     //                       "Frequency", DoubleValue (2.412e9)); // 2.4 GHz
 
-    // 1. Основная модель затухания от расстояния
+    // 1. Основная модель логарифмического затухания от расстояния
     // Используем модель LogDistance
     // Exponent (экспонента затухания): 
-    // 2.0 - свободное пространство, 3.0 - типичное офисное/городское пространство, 
+    // 2.0 - свободное пространство,
+    // 3.0 - типичное офисное/городское пространство, 
     // 4.0 - сильное затухание.
     wifiChannel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
             "Exponent", DoubleValue(2.0),
-            "ReferenceDistance", DoubleValue(1.0),
-            "ReferenceLoss", DoubleValue(40.0)); 
-    // ReferenceLoss 40dB на расстоянии 1м - реалистичное значение для 2.4ГГц
+            "ReferenceDistance", DoubleValue(1.0), // опорное расстояние, м
+            "ReferenceLoss", DoubleValue(40.0));  // затухание на опорном расстоянии, dB
+    // ReferenceLoss 40dB на опорном расстоянии 1м - реалистичное значение для 2.4ГГц
 
     // 2. ДОБАВЛЯЕМ СЛУЧАЙНОСТЬ (Замирания Nakagami)
     // Эта модель добавит случайные колебания мощности сигнала.
@@ -192,11 +192,11 @@ main(int argc, char* argv[])
 
 
     // Поскольку передатчик и приемник неподвижны, модель подвижности
-    // узлов выбираем неподвижную.
+    // узлов выбираем соответствующую.
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
-    positionAlloc->Add(Vector(0.0, 0.0, distance));
+    positionAlloc->Add(Vector(0.0, 0.0, hight));
     mobility.SetPositionAllocator(positionAlloc);
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobility.Install(c);
@@ -233,7 +233,7 @@ main(int argc, char* argv[])
     wifiPhy.EnablePcap("wifi-simple-hap", devices);
 
     // Output what we are doing
-    NS_LOG_UNCOND("Testing " << numPackets << " packets sent by HAP on distance " << distance << " m");
+    NS_LOG_UNCOND("Testing " << numPackets << " packets sent by HAP on hight " << hight << " m");
 
     Simulator::ScheduleWithContext(source->GetNode()->GetId(),
             Seconds(1.0),
@@ -257,8 +257,9 @@ main(int argc, char* argv[])
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats ();
 
     std::cout << "\n\n--- РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ---\n";
+    std::cout << "  Коэффициент усиления антенны передатчика, приемника: " << antGain << " dB\n";
     std::cout << "  Мощность передатчика: " << Pdbm << " dBm\n";
-    std::cout << "  Расстояние приемник-передатчик: " << distance << " м\n";
+    std::cout << "  Высота расположения платформы: " << hight << " м\n";
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin (); i != stats.end (); ++i)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (i->first);
