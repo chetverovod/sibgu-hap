@@ -104,7 +104,7 @@ main(int argc, char* argv[])
     // и передатчиком (узлами сети).
     double hight{100.0}; // метры
     double Pdbm{20.}; // Мощность передатчика.  
-    double antGain{0.}; // Коэффициент усиления антенны передатчика и антенны приемника.  
+    double antGain{20.}; // Коэффициент усиления антенны передатчика и антенны приемника.  
 
     // Определяем аргументы командной строки и связанные с ними переменные.
     CommandLine cmd(__FILE__);
@@ -257,13 +257,16 @@ main(int argc, char* argv[])
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats ();
 
     std::cout << "\n\n--- РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ---\n";
+    std::cout << "Условия\n";
+    std::cout << "  Размер пакета: " << packetSize << " байт\n";
+    std::cout << "  Интервал между пакетами: " << interPacketInterval << "\n";
     std::cout << "  Коэффициент усиления антенны передатчика, приемника: " << antGain << " dB\n";
     std::cout << "  Мощность передатчика: " << Pdbm << " dBm\n";
     std::cout << "  Высота расположения платформы: " << hight << " м\n";
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin (); i != stats.end (); ++i)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (i->first);
-        std::cout << "Поток " << i->first 
+        std::cout << "\nПоток " << i->first 
             << " (" << t.sourceAddress << " -> " << t.destinationAddress << ")\n";
 
         std::cout << "  Отправлено пакетов: " << i->second.txPackets << "\n";
