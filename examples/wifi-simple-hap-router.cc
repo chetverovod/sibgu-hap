@@ -76,8 +76,9 @@ int main(int argc, char* argv[])
     cmd.AddValue("groundDistance", "Distance between ground terminals A and B (m)", groundDistance);
     cmd.Parse(argc, argv);
 
-    // Disable fragmentation and RTS/CTS for simplicity
-    Config::SetDefault("ns3::WifiRemoteStationManager::NonUnicastMode", StringValue(phyModeA));
+    // NOTE: We do NOT set NonUnicastMode globally here because Network A uses DSSS 
+    // and Network B uses OFDM. Setting it globally would cause a crash when 
+    // the 5GHz node tries to send a broadcast packet using a DSSS rate.
 
     // Create Nodes
     // Node 0: HAP
@@ -106,8 +107,8 @@ int main(int argc, char* argv[])
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(40.0)
-                             //     ,"Frequency", DoubleValue(2.4e9); // 2.4 GHz
-                                    );  
+                                   //,  "Frequency", DoubleValue(2.4e9) // 2.4 GHz
+                                   );
     wifiChannelA.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
                                    "m1", DoubleValue(1.0),
@@ -146,8 +147,8 @@ int main(int argc, char* argv[])
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(46.7) // Approx ref loss for 5GHz
-                              //    ,"Frequency", DoubleValue(5.0e9)); // 5 GHz
-                                    );
+                                  //, "Frequency", DoubleValue(5.0e9) // 5 GHz
+                                  );
     wifiChannelB.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
                                    "m1", DoubleValue(1.0),
