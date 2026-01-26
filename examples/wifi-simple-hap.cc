@@ -59,7 +59,7 @@ ReceivePacket(Ptr<Socket> socket)
 {
     while (socket->Recv())
     {
-        // Закоментируем, Чтоб не замусоривать вывод в консоль.
+        // Commented out to avoid cluttering console output.
         //NS_LOG_UNCOND("Received one packet!");
     }
 }
@@ -100,13 +100,13 @@ main(int argc, char* argv[])
     Time interPacketInterval{"40ms"};
     bool verbose{false};
 
-    // Этим параметром будем менять расстояние между приемником
-    // и передатчиком (узлами сети).
-    double hight{100.0}; // метры
-    double Pdbm{20.}; // Мощность передатчика.  
-    double antGain{20.}; // Коэффициент усиления антенны передатчика и антенны приемника.  
+    // Use this parameter to change the distance between the receiver
+    // and the transmitter (network nodes).
+    double hight{100.0}; // meters
+    double Pdbm{20.}; // Transmitter power.  
+    double antGain{20.}; // Transmitter and receiver antenna gain.  
 
-    // Определяем аргументы командной строки и связанные с ними переменные.
+    // Define command line arguments and associated variables.
     CommandLine cmd(__FILE__);
     cmd.AddValue("phyMode", "Wifi Phy mode", phyMode);
     cmd.AddValue("packetSize", "size of application packet sent", packetSize);
@@ -134,11 +134,11 @@ main(int argc, char* argv[])
 
     YansWifiPhyHelper wifiPhy;
 
-    // Усиление антенн
+    // Antenna gain
     wifiPhy.Set ("TxGain", DoubleValue (antGain));
     wifiPhy.Set ("RxGain", DoubleValue (antGain));
 
-    // Стандартная мощность 20 dBm (100 мВт)
+    // Standard power 20 dBm (100 mW)
     wifiPhy.Set ("TxPowerStart", DoubleValue (Pdbm));
     wifiPhy.Set ("TxPowerEnd", DoubleValue (Pdbm));
 
@@ -147,30 +147,25 @@ main(int argc, char* argv[])
 
     YansWifiChannelHelper wifiChannel;
     wifiChannel.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-
-
-    // Используем Friis (прямая видимость) и частоту 2.4 ГГц (стандарт для 802.11b)
-    //  wifiChannel.AddPropagationLoss ("ns3::FriisPropagationLossModel", 
-    //                       "Frequency", DoubleValue (2.412e9)); // 2.4 GHz
-
-    // 1. Основная модель логарифмического затухания от расстояния
-    // Используем модель LogDistance
-    // Exponent (экспонента затухания): 
-    // 2.0 - свободное пространство,
-    // 3.0 - типичное офисное/городское пространство, 
-    // 4.0 - сильное затухание.
+            
+    // 1. Main model of logarithmic distance-dependent path loss
+    // Use LogDistance model
+    // Exponent: 
+    // 2.0 - free space,
+    // 3.0 - typical office/urban environment, 
+    // 4.0 - heavy attenuation.
     wifiChannel.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
             "Exponent", DoubleValue(2.0),
-            "ReferenceDistance", DoubleValue(1.0), // опорное расстояние, м
-            "ReferenceLoss", DoubleValue(40.0));  // затухание на опорном расстоянии, dB
-    // ReferenceLoss 40dB на опорном расстоянии 1м - реалистичное значение для 2.4ГГц
+            "ReferenceDistance", DoubleValue(1.0), // reference distance, m
+            "ReferenceLoss", DoubleValue(40.0));  // attenuation at reference distance, dB
+    // ReferenceLoss 40dB at reference distance 1m is a realistic value for 2.4GHz
 
-    // 2. ДОБАВЛЯЕМ СЛУЧАЙНОСТЬ (Замирания Nakagami)
-    // Эта модель добавит случайные колебания мощности сигнала.
-    // m0=1.0 означает сильные колебания (Rayleigh fading), что дает красивую
-    // "ступенчатую" кривую потерь.
-    // Без этой добавки переход от состояния "Ни одного пакета не потеряно" до
-    // сотояния "Все пакеты потеряны" происходит при увеличении расстояния на 1см.
+    // 2. ADD RANDOMNESS (Nakagami Fading)
+    // This model will add random fluctuations to signal power.
+    // m0=1.0 means strong fluctuations (Rayleigh fading), which provides a nice
+    // "stepped" loss curve.
+    // Without this addition, the transition from the state "No packets lost" to
+    // the state "All packets lost" occurs when the distance is increased by 1cm.
     wifiChannel.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
             "m0", DoubleValue(1.0), 
             "m1", DoubleValue(1.0),
@@ -191,8 +186,8 @@ main(int argc, char* argv[])
     NetDeviceContainer devices = wifi.Install(wifiPhy, wifiMac, c);
 
 
-    // Поскольку передатчик и приемник неподвижны, модель подвижности
-    // узлов выбираем соответствующую.
+    // Since the transmitter and receiver are stationary, the mobility model
+    // is chosen accordingly.
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     positionAlloc->Add(Vector(0.0, 0.0, 0.0));
@@ -217,15 +212,15 @@ main(int argc, char* argv[])
 
     Ptr<Socket> source = Socket::CreateSocket(c.Get(1), tid);
 
-    // Бродкаст адрес
+    // Broadcast address
     //InetSocketAddress remote = InetSocketAddress(Ipv4Address("255.255.255.255"), 80);
 
-    // Чтобы flowmonitor  мог нормально работать
-    // используем конкретный адрес получателя (Node 0), а не broadcast.
-    // Иначе он не сможет различать потоки данных.
+    // To allow FlowMonitor to work properly
+    // we use a specific destination address (Node 0), not broadcast.
+    // Otherwise, it will not be able to distinguish data flows.
     InetSocketAddress remote = InetSocketAddress(i.GetAddress(0), 80);
 
-    // Для unicast флаг SetAllowBroadcast не обязателен, но и не мешает
+    // For unicast, the SetAllowBroadcast flag is not mandatory, but does not interfere
   //  source->SetAllowBroadcast(true);
     source->Connect(remote);
 
@@ -251,38 +246,38 @@ main(int argc, char* argv[])
     Simulator::Stop (Seconds (44.0));
     Simulator::Run();
 
-    // 7. Сбор статистики
+    // 7. Collecting statistics
     monitor->CheckForLostPackets ();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier> (flowmon.GetClassifier ());
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats ();
 
-    std::cout << "\n\n--- РЕЗУЛЬТАТЫ СИМУЛЯЦИИ ---\n";
-    std::cout << "Условия\n";
-    std::cout << "  Размер пакета: " << packetSize << " байт\n";
-    std::cout << "  Интервал между пакетами: " << interPacketInterval << "\n";
-    std::cout << "  Коэффициент усиления антенны передатчика, приемника: " << antGain << " dB\n";
-    std::cout << "  Мощность передатчика: " << Pdbm << " dBm\n";
-    std::cout << "  Высота расположения платформы: " << hight << " м\n";
+    std::cout << "\n\n--- SIMULATION RESULTS ---\n";
+    std::cout << "Conditions\n";
+    std::cout << "  Packet size: " << packetSize << " bytes\n";
+    std::cout << "  Interval between packets: " << interPacketInterval << "\n";
+    std::cout << "  Transmitter, receiver antenna gain: " << antGain << " dB\n";
+    std::cout << "  Transmitter power: " << Pdbm << " dBm\n";
+    std::cout << "  HAP height: " << hight << " m\n";
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin (); i != stats.end (); ++i)
     {
         Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow (i->first);
-        std::cout << "\nПоток " << i->first 
+        std::cout << "\nFlow " << i->first 
             << " (" << t.sourceAddress << " -> " << t.destinationAddress << ")\n";
 
-        std::cout << "  Отправлено пакетов: " << i->second.txPackets << "\n";
-        std::cout << "  Получено пакетов:   " << i->second.rxPackets << "\n";
+        std::cout << "  Sent packets: " << i->second.txPackets << "\n";
+        std::cout << "  Received packets:   " << i->second.rxPackets << "\n";
 
         double lostPackets = i->second.txPackets - i->second.rxPackets;
         double lossRatio = (lostPackets / i->second.txPackets) * 100.0;
-        std::cout << "  Потеряно пакетов:   " << lostPackets << " (" << lossRatio << "%)\n";
+        std::cout << "  Lost packets:   " << lostPackets << " (" << lossRatio << "%)\n";
 
         double throughput = i->second.rxBytes * 8.0 / (i->second.timeLastRxPacket.GetSeconds() - i->second.timeFirstTxPacket.GetSeconds());
-        std::cout << "  Пропускная способность: " << throughput / 1024 / 1024 << " Мбит/с\n";
+        std::cout << "  Throughput: " << throughput / 1024 / 1024 << " Mbps\n";
 
         if (i->second.rxPackets > 0)
         {
             double delay = i->second.delaySum.GetSeconds() / i->second.rxPackets;
-            std::cout << "  Средняя задержка:  " << delay * 1000 << " мс\n";
+            std::cout << "  Average delay:  " << delay * 1000 << " ms\n";
         }
     }
 
