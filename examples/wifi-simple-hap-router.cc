@@ -56,12 +56,12 @@ int main(int argc, char* argv[])
     bool verbose{false};
 
     // HAP Parameters
-    double hight{100.0};    // meters
+    double hight{20000.0};    // meters
     double Pdbm{20.};       // Transmitter power (dBm)
     double antGain{20.};    // Antenna gain (dB)
 
     // Ground separation (distance between terminal A and B on the ground)
-    double groundDistance{500.0}; 
+    double groundDistance{5000.0}; 
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("phyModeA", "Wifi Phy mode Network A (2.4GHz)", phyModeA);
@@ -107,7 +107,6 @@ int main(int argc, char* argv[])
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(40.0)
-                                   //,  "Frequency", DoubleValue(2.4e9) // 2.4 GHz
                                    );
     wifiChannelA.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
@@ -147,7 +146,6 @@ int main(int argc, char* argv[])
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(46.7) // Approx ref loss for 5GHz
-                                  //, "Frequency", DoubleValue(5.0e9) // 5 GHz
                                   );
     wifiChannelB.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
@@ -176,10 +174,10 @@ int main(int argc, char* argv[])
     positionAlloc->Add(Vector(0.0, 0.0, hight));
     
     // Node 1 (Ground A): On ground, at 0,0
-    positionAlloc->Add(Vector(0.0, 0.0, 0.0));
+    positionAlloc->Add(Vector(-groundDistance/2, 0.0, 0.0));
     
     // Node 2 (Ground B): On ground, separated by groundDistance
-    positionAlloc->Add(Vector(groundDistance, 0.0, 0.0));
+    positionAlloc->Add(Vector(groundDistance/2, 0.0, 0.0));
 
     mobility.SetPositionAllocator(positionAlloc);
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
