@@ -21,3 +21,12 @@ build_lib_example(
                        ${libwifi}
                        ${libflow-monitor}
 )
+
+build_lib_example(
+    NAME wifi-moving-hap-router
+    SOURCE_FILES wifi-moving-hap-router.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libflow-monitor}
+)
