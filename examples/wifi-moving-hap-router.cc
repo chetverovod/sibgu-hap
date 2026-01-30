@@ -26,18 +26,19 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("WifiHapDualBandMoving");
 
-// --- Глобальные переменные ---
+// --- Global variables ---
 Ptr<ConstantVelocityMobilityModel> g_hapMobility;
 Ptr<YansWifiPhy> g_phyHapA;
 Ptr<YansWifiPhy> g_phyHapB;
 Ptr<MobilityModel> g_mobilityNodeA;
 Ptr<MobilityModel> g_mobilityNodeB;
 
-// Параметры кругового движения и антенны
-double g_circleRadius = 6000.0; 
-double g_angularVelocity = 2 * M_PI / 100.0; 
+// Circular motion and antenna parameters
+double circleRadius = 6000.0; 
+double time_of_loop = 30*60; // Time for making fool circle around
+double g_angularVelocity = 2 * M_PI / time_of_loop;
 double g_maxAntennaGain = 20.0; // dBi
-double g_beamwidthExponent = 2.0; // Степень для моделирования ширины луча
+double g_beamwidthExponent = 2.0; // Degree for simulating beam width
 
 void ReceivePacket(Ptr<Socket> socket)
 {
@@ -60,13 +61,13 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize, uint32_t pktCo
     }
 }
 
-// Вспомогательная функция для расчета вектора
+// Helper function for calculating a vector
 Vector GetVector(Vector from, Vector to)
 {
     return Vector(to.x - from.x, to.y - from.y, to.z - from.z);
 }
 
-// Функция расчета угла между двумя векторами (в радианах)
+// Function to calculate the angle between two vectors (in radians)
 double CalculateAngle(Vector v1, Vector v2)
 {
     double dotProduct = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
@@ -76,28 +77,29 @@ double CalculateAngle(Vector v1, Vector v2)
     if (mag1 * mag2 == 0) return 0.0;
 
     double cosAngle = dotProduct / (mag1 * mag2);
-    // Ограничиваем диапазон, чтобы избежать ошибок округления
+    
+    // Limit the range to avoid rounding errors
     if (cosAngle > 1.0) cosAngle = 1.0;
     if (cosAngle < -1.0) cosAngle = -1.0;
 
     return std::acos(cosAngle);
 }
 
-// Расчет усиления на основе угла отклонения от центра луча (Cosine Antenna Model approximation)
+// Gain calculation based on the beam offset angle (Cosine Antenna Model approximation)
 double CalculateDirectionalGain(double angleRad)
 {
     // Модель: Gain = MaxGain + 10 * log10(cos(angle)^exponent)
     double cosAngle = std::cos(angleRad);
-    if (cosAngle < 0.0) cosAngle = 0.0; // Падение за лепесток
+    if (cosAngle < 0.0) cosAngle = 0.0; // Go out from the beam.
     
-    // Для избежания ошибки log10(0)
-    if (cosAngle < 0.01) return -20.0; // Минимальное усиление
+    // To avoid error log10(0)
+    if (cosAngle < 0.01) return -20.0; // Minimum gain
 
     double gain = g_maxAntennaGain + 10.0 * std::log10(std::pow(cosAngle, g_beamwidthExponent));
     return gain;
 }
 
-// --- Функция обновления позиции HAP и усиления антенны ---
+// --- HAP position and antenna gain update function ---
 void UpdateHapState()
 {
     if (!g_hapMobility || !g_phyHapA || !g_phyHapB)
@@ -105,17 +107,17 @@ void UpdateHapState()
         return;
     }
 
-    // 1. Обновление вектора скорости (движение по кругу)
+    // 1. Updating the velocity vector (movement in a circle)
     Vector hapPos = g_hapMobility->GetPosition();
     double vx = -g_angularVelocity * hapPos.y;
     double vy =  g_angularVelocity * hapPos.x;
     g_hapMobility->SetVelocity(Vector(vx, vy, 0.0));
 
-    // Вектор направления "взгляда" HAP (в центр круга 0,0,h)
-    // HAP смотрит векторно на точку (0,0,0).
+    // HAP's "view" direction vector (towards the center of the circle 0,0,h)
+    // HAP looks vectorially at the point (0,0,0).
     Vector viewVector = GetVector(hapPos, Vector(0.0, 0.0, 0.0));
-
-    // 2. Расчет усиления для Network A (HAP <-> Ground A)
+   
+    // 2. Calculate the gain for Network A (HAP <-> Ground A)
     Vector vecHapToA = GetVector(hapPos, g_mobilityNodeA->GetPosition());
     double angleA = CalculateAngle(viewVector, vecHapToA);
     double gainA = CalculateDirectionalGain(angleA);
@@ -123,7 +125,7 @@ void UpdateHapState()
     g_phyHapA->SetAttribute("TxGain", DoubleValue(gainA));
     g_phyHapA->SetAttribute("RxGain", DoubleValue(gainA));
 
-    // 3. Расчет усиления для Network B (HAP <-> Ground B)
+    // 3. Calculate gain for Network B (HAP <-> Ground B)
     Vector vecHapToB = GetVector(hapPos, g_mobilityNodeB->GetPosition());
     double angleB = CalculateAngle(viewVector, vecHapToB);
     double gainB = CalculateDirectionalGain(angleB);
@@ -132,7 +134,8 @@ void UpdateHapState()
     g_phyHapB->SetAttribute("RxGain", DoubleValue(gainB));
 
     NS_LOG_DEBUG("HAP Update: GainA=" << gainA << " dB, GainB=" << gainB << " dB");
-
+    
+    // Set time for next HAP update
     Simulator::Schedule(Seconds(0.1), &UpdateHapState);
 }
 
@@ -141,13 +144,13 @@ int main(int argc, char* argv[])
     std::string phyModeA("DsssRate1Mbps");
     std::string phyModeB("OfdmRate6Mbps");
     uint32_t packetSize{1000};
-    uint32_t numPackets{10};
-    Time interPacketInterval{"40ms"};
+    uint32_t numPackets{3600};
+    Time interPacketInterval{"1s"};
     bool verbose{false};
 
     double hight{20000.0};    
-    double Pdbm{20.0};       // Исправлено: добавлено }
-    double antGain{20.0};    // Исправлено: добавлено }
+    double Pdbm{46.0};       
+    double antGain{20.0};    
 
     double groundDistance{5000.0}; 
 
@@ -162,6 +165,8 @@ int main(int argc, char* argv[])
     cmd.AddValue("txPower", "Power of transmitter, (dBm)", Pdbm);
     cmd.AddValue("antGain", "Directional Antenna max gain (dBi)", antGain);
     cmd.AddValue("groundDistance", "Distance between ground terminals A and B (m)", groundDistance);
+    cmd.AddValue("circleRadius", "HAP trajectory radius (m)",circleRadius);
+    
     cmd.Parse(argc, argv);
 
     g_maxAntennaGain = antGain;
@@ -205,7 +210,7 @@ int main(int argc, char* argv[])
     devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(0))); // HAP
     devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(1))); // Ground A
 
-    // Сохраняем указатель на PHY HAP для управления Gain
+    // Store a pointer to the PHY HAP for Gain control
     g_phyHapA = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesA.Get(0))->GetPhy());
 
 
@@ -242,7 +247,7 @@ int main(int argc, char* argv[])
     devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(0))); // HAP
     devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(2))); // Ground B
 
-    // Сохраняем указатель на PHY HAP для управления Gain
+    // Store a pointer to the PHY HAP for Gain control
     g_phyHapB = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesB.Get(0))->GetPhy());
 
 
@@ -250,7 +255,7 @@ int main(int argc, char* argv[])
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     
-    positionAlloc->Add(Vector(g_circleRadius, 0.0, hight));
+    positionAlloc->Add(Vector(circleRadius, 0.0, hight));
     positionAlloc->Add(Vector(-groundDistance/2, 0.0, 0.0));
     positionAlloc->Add(Vector(groundDistance/2, 0.0, 0.0));
 
@@ -265,10 +270,11 @@ int main(int argc, char* argv[])
 
     g_hapMobility = nodes.Get(0)->GetObject<ConstantVelocityMobilityModel>();
     
-    // Сохраняем модели мобильности наземных станций для расчета углов
+    // Save ground station mobility models for angle calculations
     g_mobilityNodeA = nodes.Get(1)->GetObject<MobilityModel>();
     g_mobilityNodeB = nodes.Get(2)->GetObject<MobilityModel>();
 
+    // Set time for first HAP update
     Simulator::Schedule(Seconds(0.1), &UpdateHapState);
 
 
@@ -323,7 +329,7 @@ int main(int argc, char* argv[])
 
     NS_LOG_UNCOND("Testing " << numPackets << " packets sent from Ground A (2.4GHz) to Ground B (5GHz) via Moving HAP");
     NS_LOG_UNCOND("HAP Height: " << hight << " m");
-    NS_LOG_UNCOND("HAP Circle Radius: " << g_circleRadius << " m");
+    NS_LOG_UNCOND("HAP Circle Radius: " << circleRadius << " m");
     NS_LOG_UNCOND("Ground Separation: " << groundDistance << " m");
     NS_LOG_UNCOND("Using Simulated Directional Antenna (Dynamic Gain on YansWifiPhy).");
 
@@ -338,7 +344,9 @@ int main(int argc, char* argv[])
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    Simulator::Stop(Seconds(120.0)); 
+    //Simulator::Stop(Seconds(120.0)); 
+    //Simulation time corresponds to full circle of HAP.
+    Simulator::Stop(Seconds(3600.0)); 
     Simulator::Run();
 
     // --- Statistics ---
