@@ -281,6 +281,9 @@ int main(int argc, char* argv[])
     g_mobilityNodeB = nodes.Get(2)->GetObject<MobilityModel>();
     
     AnimationInterface anim("animation.xml"); // Creates input file for NetAnim tool.
+    anim.UpdateNodeDescription(0, "HAP");
+    anim.UpdateNodeDescription(1, "Ground_A");
+    anim.UpdateNodeDescription(2, "Ground_B");
 
     // Set time for first HAP update
     Simulator::Schedule(Seconds(0.1), &UpdateHapState);
