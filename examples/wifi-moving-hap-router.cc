@@ -24,8 +24,8 @@
 #include <cmath>
 
 using namespace ns3;
-
-NS_LOG_COMPONENT_DEFINE("WifiHapDualBandMoving");
+enum {HAP, UT_A, UT_B};
+NS_LOG_COMPONENT_DEFINE("WifiMovingHapRouter");
 
 // --- Global variables ---
 Ptr<ConstantVelocityMobilityModel> g_hapMobility;
@@ -40,6 +40,7 @@ double time_of_loop = 30*60; // Time for making fool circle around
 double g_angularVelocity = 2 * M_PI / time_of_loop;
 double g_maxAntennaGain = 20.0; // dBi
 double g_beamwidthExponent = 2.0; // Degree for simulating beam width
+Vector g_circleCenter = Vector(0.0, 0.0, 0.0);                                  
 
 void ReceivePacket(Ptr<Socket> socket)
 {
@@ -108,17 +109,25 @@ void UpdateHapState()
         return;
     }
 
-    // 1. Updating the velocity vector (movement in a circle)
+    // 1. Updating the velocity vector (movement in a circle around arbitrary center) ---
+    // We calculate position relative to the center of the circle.
+    // dx = x - center_x, dy = y - center_y
     Vector hapPos = g_hapMobility->GetPosition();
-    double vx = -g_angularVelocity * hapPos.y;
-    double vy =  g_angularVelocity * hapPos.x;
+    double rx = hapPos.x - g_circleCenter.x;
+    double ry = hapPos.y - g_circleCenter.y;
+
+    // Velocity for circular motion is perpendicular to the radius vector.
+    // Vx = -omega * (y - yc)
+    // Vy =  omega * (x - xc)
+    double vx = -g_angularVelocity * ry;
+    double vy =  g_angularVelocity * rx;
+    
     g_hapMobility->SetVelocity(Vector(vx, vy, 0.0));
 
+    // HAP's "view" direction vector ---
+    // Now HAP looks vectorially at the arbitrary center point (g_circleCenter).
+    Vector viewVector = GetVector(hapPos, g_circleCenter);
 
-    // HAP's "view" direction vector (towards the center of the circle 0,0,h)
-    // HAP looks vectorially at the point (0,0,0).
-    Vector viewVector = GetVector(hapPos, Vector(0.0, 0.0, 0.0));
-   
     // 2. Calculate the gain for Network A (HAP <-> Ground A)
     Vector vecHapToA = GetVector(hapPos, g_mobilityNodeA->GetPosition());
     double angleA = CalculateAngle(viewVector, vecHapToA);
@@ -143,9 +152,6 @@ void UpdateHapState()
 
 int main(int argc, char* argv[])
 {
-
-
-
     std::string phyModeA("DsssRate1Mbps");
     std::string phyModeB("OfdmRate6Mbps");
     uint32_t packetSize{1000};
@@ -159,6 +165,10 @@ int main(int argc, char* argv[])
 
     double groundDistance{5000.0}; 
 
+     // --- Variables for circle center coordinates ---
+    double centerX{6000.0};
+    double centerY{6000.0};
+    
     CommandLine cmd(__FILE__);
     cmd.AddValue("phyModeA", "Wifi Phy mode Network A (2.4GHz)", phyModeA);
     cmd.AddValue("phyModeB", "Wifi Phy mode Network B (5GHz)", phyModeB);
@@ -171,8 +181,13 @@ int main(int argc, char* argv[])
     cmd.AddValue("antGain", "Directional Antenna max gain (dBi)", antGain);
     cmd.AddValue("groundDistance", "Distance between ground terminals A and B (m)", groundDistance);
     cmd.AddValue("circleRadius", "HAP trajectory radius (m)",circleRadius);
+     
+    // --- Command line options for HAP trajectory center coordinates ---
+    cmd.AddValue("centerX", "X coordinate of the circle center", centerX);
+    cmd.AddValue("centerY", "Y coordinate of the circle center", centerY);
     
     cmd.Parse(argc, argv);
+    g_circleCenter = Vector(centerX, centerY, 0.0);                                  
 
     g_maxAntennaGain = antGain;
 
@@ -212,8 +227,8 @@ int main(int argc, char* argv[])
     
     // Install Net A
     NetDeviceContainer devicesA;
-    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(0))); // HAP
-    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(1))); // Ground A
+    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(HAP))); // HAP
+    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(UT_A))); // Ground A
 
     // Store a pointer to the PHY HAP for Gain control
     g_phyHapA = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesA.Get(0))->GetPhy());
@@ -249,8 +264,8 @@ int main(int argc, char* argv[])
     wifiMacB.SetType("ns3::AdhocWifiMac");
 
     NetDeviceContainer devicesB;
-    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(0))); // HAP
-    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(2))); // Ground B
+    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(HAP))); // HAP
+    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(UT_B))); // Ground B
 
     // Store a pointer to the PHY HAP for Gain control
     g_phyHapB = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesB.Get(0))->GetPhy());
@@ -259,31 +274,34 @@ int main(int argc, char* argv[])
     // --- Mobility Setup ---
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
-    
-    positionAlloc->Add(Vector(2*circleRadius, circleRadius, hight)); // A
+     
+    // --- HAP Initial Position ---
+    // Position the HAP at the perimeter of the circle defined by the center.
+    // Start at angle 0: (centerX + radius, centerY, height)
+    positionAlloc->Add(Vector(centerX + circleRadius, centerY, hight)); // HAP
+    positionAlloc->Add(Vector(0.0, 0.0, 0.0)); // A
     positionAlloc->Add(Vector(0, circleRadius, 0.0)); // B
-    positionAlloc->Add(Vector(groundDistance, circleRadius, 0.0)); // HAP
     
 
     mobility.SetPositionAllocator(positionAlloc);
     
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
-    mobility.Install(nodes.Get(1));
-    mobility.Install(nodes.Get(2));
+    mobility.Install(nodes.Get(UT_A));
+    mobility.Install(nodes.Get(UT_B));
 
     mobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-    mobility.Install(nodes.Get(0));
+    mobility.Install(nodes.Get(HAP));
 
-    g_hapMobility = nodes.Get(0)->GetObject<ConstantVelocityMobilityModel>();
+    g_hapMobility = nodes.Get(HAP)->GetObject<ConstantVelocityMobilityModel>();
     
     // Save ground station mobility models for angle calculations
-    g_mobilityNodeA = nodes.Get(1)->GetObject<MobilityModel>();
-    g_mobilityNodeB = nodes.Get(2)->GetObject<MobilityModel>();
+    g_mobilityNodeA = nodes.Get(UT_A)->GetObject<MobilityModel>();
+    g_mobilityNodeB = nodes.Get(UT_B)->GetObject<MobilityModel>();
     
     AnimationInterface anim("animation.xml"); // Creates input file for NetAnim tool.
-    anim.UpdateNodeDescription(0, "HAP");
-    anim.UpdateNodeDescription(1, "Ground_A");
-    anim.UpdateNodeDescription(2, "Ground_B");
+    anim.UpdateNodeDescription(HAP, "HAP");
+    anim.UpdateNodeDescription(UT_A, "Ground_A");
+    anim.UpdateNodeDescription(UT_B, "Ground_B");
     anim.UpdateNodeSize(0, 20, 20);
     anim.UpdateNodeSize(1, 20, 20);
     anim.UpdateNodeSize(2, 20, 20);
@@ -304,19 +322,19 @@ int main(int argc, char* argv[])
     Ipv4InterfaceContainer interfacesB = ipv4.Assign(devicesB);
 
     // --- Routing Setup ---
-    Ptr<Ipv4> ipv4Hap = nodes.Get(0)->GetObject<Ipv4>();
+    Ptr<Ipv4> ipv4Hap = nodes.Get(HAP)->GetObject<Ipv4>();
     ipv4Hap->SetAttribute("IpForward", BooleanValue(true));
 
     Ipv4StaticRoutingHelper staticRouting;
 
-    Ptr<Ipv4> ipv4Node1 = nodes.Get(1)->GetObject<Ipv4>();
+    Ptr<Ipv4> ipv4Node1 = nodes.Get(UT_A)->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> staticRoutingNode1 = staticRouting.GetStaticRouting(ipv4Node1);
     staticRoutingNode1->AddNetworkRouteTo(Ipv4Address("10.1.2.0"), 
                                            Ipv4Mask("255.255.255.0"), 
                                            interfacesA.GetAddress(0), 
                                            1);
 
-    Ptr<Ipv4> ipv4Node2 = nodes.Get(2)->GetObject<Ipv4>();
+    Ptr<Ipv4> ipv4Node2 = nodes.Get(UT_B)->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> staticRoutingNode2 = staticRouting.GetStaticRouting(ipv4Node2);
     staticRoutingNode2->AddNetworkRouteTo(Ipv4Address("10.1.1.0"), 
                                            Ipv4Mask("255.255.255.0"), 
@@ -327,12 +345,12 @@ int main(int argc, char* argv[])
     uint16_t port = 9;
     
     TypeId tid = TypeId::LookupByName("ns3::UdpSocketFactory");
-    Ptr<Socket> recvSink = Socket::CreateSocket(nodes.Get(2), tid);
+    Ptr<Socket> recvSink = Socket::CreateSocket(nodes.Get(UT_B), tid);
     InetSocketAddress local = InetSocketAddress(Ipv4Address::GetAny(), port);
     recvSink->Bind(local);
     recvSink->SetRecvCallback(MakeCallback(&ReceivePacket));
 
-    Ptr<Socket> source = Socket::CreateSocket(nodes.Get(1), tid);
+    Ptr<Socket> source = Socket::CreateSocket(nodes.Get(UT_A), tid);
     InetSocketAddress remote = InetSocketAddress(interfacesB.GetAddress(1), port);
     source->Connect(remote);
 
@@ -357,7 +375,6 @@ int main(int argc, char* argv[])
     FlowMonitorHelper flowmon;
     Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
-    //Simulator::Stop(Seconds(120.0)); 
     //Simulation time corresponds to full circle of HAP.
     Simulator::Stop(Seconds(3600.0)); 
     Simulator::Run();
