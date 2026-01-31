@@ -11,6 +11,7 @@
 // IMPLEMENTATION: We simulate directional antennas by dynamically adjusting TxGain/RxGain
 // attributes on YansWifiPhy based on the angle between HAP and the Ground Station.
 
+#include "ns3/netanim-module.h"   // Add animator module.
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
 #include "ns3/internet-module.h"
@@ -113,6 +114,7 @@ void UpdateHapState()
     double vy =  g_angularVelocity * hapPos.x;
     g_hapMobility->SetVelocity(Vector(vx, vy, 0.0));
 
+
     // HAP's "view" direction vector (towards the center of the circle 0,0,h)
     // HAP looks vectorially at the point (0,0,0).
     Vector viewVector = GetVector(hapPos, Vector(0.0, 0.0, 0.0));
@@ -141,6 +143,9 @@ void UpdateHapState()
 
 int main(int argc, char* argv[])
 {
+
+
+
     std::string phyModeA("DsssRate1Mbps");
     std::string phyModeB("OfdmRate6Mbps");
     uint32_t packetSize{1000};
@@ -256,8 +261,9 @@ int main(int argc, char* argv[])
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     
     positionAlloc->Add(Vector(circleRadius, 0.0, hight));
-    positionAlloc->Add(Vector(-groundDistance/2, 0.0, 0.0));
+    positionAlloc->Add(Vector(0.0, 0.0, 0.0));
     positionAlloc->Add(Vector(groundDistance/2, 0.0, 0.0));
+    
 
     mobility.SetPositionAllocator(positionAlloc);
     
@@ -273,10 +279,11 @@ int main(int argc, char* argv[])
     // Save ground station mobility models for angle calculations
     g_mobilityNodeA = nodes.Get(1)->GetObject<MobilityModel>();
     g_mobilityNodeB = nodes.Get(2)->GetObject<MobilityModel>();
+    
+    AnimationInterface anim("animation.xml"); // Creates input file for NetAnim tool.
 
     // Set time for first HAP update
     Simulator::Schedule(Seconds(0.1), &UpdateHapState);
-
 
     // --- Internet Stack & IP ---
     InternetStackHelper internet;
@@ -349,7 +356,7 @@ int main(int argc, char* argv[])
     Simulator::Stop(Seconds(3600.0)); 
     Simulator::Run();
 
-    // --- Statistics ---
+     // --- Statistics ---
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
     std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();

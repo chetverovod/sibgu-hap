@@ -29,4 +29,5 @@ build_lib_example(
                        ${libinternet}
                        ${libwifi}
                        ${libflow-monitor}
+                       ${libnetanim}
 )
