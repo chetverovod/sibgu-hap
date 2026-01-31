@@ -260,9 +260,9 @@ int main(int argc, char* argv[])
     MobilityHelper mobility;
     Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
     
-    positionAlloc->Add(Vector(circleRadius, 0.0, hight));
-    positionAlloc->Add(Vector(0.0, 0.0, 0.0));
-    positionAlloc->Add(Vector(groundDistance/2, 0.0, 0.0));
+    positionAlloc->Add(Vector(2*circleRadius, circleRadius, hight)); // A
+    positionAlloc->Add(Vector(0, circleRadius, 0.0)); // B
+    positionAlloc->Add(Vector(groundDistance, circleRadius, 0.0)); // HAP
     
 
     mobility.SetPositionAllocator(positionAlloc);
@@ -284,6 +284,9 @@ int main(int argc, char* argv[])
     anim.UpdateNodeDescription(0, "HAP");
     anim.UpdateNodeDescription(1, "Ground_A");
     anim.UpdateNodeDescription(2, "Ground_B");
+    anim.UpdateNodeSize(0, 20, 20);
+    anim.UpdateNodeSize(1, 20, 20);
+    anim.UpdateNodeSize(2, 20, 20);
 
     // Set time for first HAP update
     Simulator::Schedule(Seconds(0.1), &UpdateHapState);
