@@ -21,7 +21,7 @@
 #include "ns3/ipv4-list-routing-helper.h"
 
 using namespace ns3;
-
+enum {HAP, UT_A, UT_B};
 NS_LOG_COMPONENT_DEFINE("WifiHapDualBand");
 
 void ReceivePacket(Ptr<Socket> socket)
@@ -123,8 +123,8 @@ int main(int argc, char* argv[])
     
     // Install Net A on HAP and Ground A
     NetDeviceContainer devicesA;
-    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(0))); // HAP
-    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(1))); // Ground A
+    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(HAP))); // HAP
+    devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(UT_A))); // Ground A
 
 
     // --- Network B Setup (5 GHz, 802.11a) ---
@@ -162,8 +162,8 @@ int main(int argc, char* argv[])
 
     // Install Net B on HAP and Ground B
     NetDeviceContainer devicesB;
-    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(0))); // HAP
-    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(2))); // Ground B
+    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(HAP))); // HAP
+    devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(UT_B))); // Ground B
 
 
     // --- Mobility Setup ---
@@ -200,7 +200,7 @@ int main(int argc, char* argv[])
 
     // --- Routing Setup ---
     // 1. Enable IP Forwarding on HAP (Node 0)
-    Ptr<Ipv4> ipv4Hap = nodes.Get(0)->GetObject<Ipv4>();
+    Ptr<Ipv4> ipv4Hap = nodes.Get(HAP)->GetObject<Ipv4>();
     ipv4Hap->SetAttribute("IpForward", BooleanValue(true));
 
     // 2. Configure Static Routes
@@ -208,7 +208,7 @@ int main(int argc, char* argv[])
 
     // Route for Ground A (Node 1) to reach Network B (via HAP)
     // Destination: 10.1.2.0/24, Gateway: 10.1.1.1 (HAP), Interface: Network A interface of Node 1
-    Ptr<Ipv4> ipv4Node1 = nodes.Get(1)->GetObject<Ipv4>();
+    Ptr<Ipv4> ipv4Node1 = nodes.Get(UT_A)->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> staticRoutingNode1 = staticRouting.GetStaticRouting(ipv4Node1);
     staticRoutingNode1->AddNetworkRouteTo(Ipv4Address("10.1.2.0"), 
                                            Ipv4Mask("255.255.255.0"), 
@@ -217,7 +217,7 @@ int main(int argc, char* argv[])
 
     // Route for Ground B (Node 2) to reach Network A (via HAP)
     // Destination: 10.1.1.0/24, Gateway: 10.1.2.1 (HAP), Interface: Network B interface of Node 2
-    Ptr<Ipv4> ipv4Node2 = nodes.Get(2)->GetObject<Ipv4>();
+    Ptr<Ipv4> ipv4Node2 = nodes.Get(UT_B)->GetObject<Ipv4>();
     Ptr<Ipv4StaticRouting> staticRoutingNode2 = staticRouting.GetStaticRouting(ipv4Node2);
     staticRoutingNode2->AddNetworkRouteTo(Ipv4Address("10.1.1.0"), 
                                            Ipv4Mask("255.255.255.0"), 
@@ -230,13 +230,13 @@ int main(int argc, char* argv[])
     
     // Sink on Node 2 (Ground B)
     TypeId tid = TypeId::LookupByName("ns3::UdpSocketFactory");
-    Ptr<Socket> recvSink = Socket::CreateSocket(nodes.Get(2), tid);
+    Ptr<Socket> recvSink = Socket::CreateSocket(nodes.Get(UT_B), tid);
     InetSocketAddress local = InetSocketAddress(Ipv4Address::GetAny(), port);
     recvSink->Bind(local);
     recvSink->SetRecvCallback(MakeCallback(&ReceivePacket));
 
     // Source on Node 1 (Ground A)
-    Ptr<Socket> source = Socket::CreateSocket(nodes.Get(1), tid);
+    Ptr<Socket> source = Socket::CreateSocket(nodes.Get(UT_A), tid);
     InetSocketAddress remote = InetSocketAddress(interfacesB.GetAddress(1), port); // Dest IP of Node 2
     source->Connect(remote);
 
