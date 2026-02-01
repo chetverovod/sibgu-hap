@@ -160,7 +160,7 @@ int main(int argc, char* argv[])
     bool verbose{false};
 
     double hight{20000.0};    
-    double Pdbm{46.0};       
+    double Pdbm{30.0};       
     double antGain{20.0};    
 
     double groundDistance{5000.0}; 
@@ -278,22 +278,20 @@ int main(int argc, char* argv[])
     // --- HAP Initial Position ---
     // Position the HAP at the perimeter of the circle defined by the center.
     // Start at angle 0: (centerX + radius, centerY, height)
-    positionAlloc->Add(Vector(centerX + circleRadius, centerY, hight)); // HAP
+    positionAlloc->Add(Vector(centerX + circleRadius, centerY, hight)); //  HAP
     positionAlloc->Add(Vector(0.0, 0.0, 0.0)); // A
-    positionAlloc->Add(Vector(0, circleRadius, 0.0)); // B
-    
+    positionAlloc->Add(Vector(5000.0, 0.0, 0.0)); // B
 
-    mobility.SetPositionAllocator(positionAlloc);
-    
+
+    mobility.SetPositionAllocator(positionAlloc); // Keep order: HAP, A, B
+    mobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
+    mobility.Install(nodes.Get(HAP));
+    g_hapMobility = nodes.Get(HAP)->GetObject<ConstantVelocityMobilityModel>();
+ 
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobility.Install(nodes.Get(UT_A));
     mobility.Install(nodes.Get(UT_B));
 
-    mobility.SetMobilityModel("ns3::ConstantVelocityMobilityModel");
-    mobility.Install(nodes.Get(HAP));
-
-    g_hapMobility = nodes.Get(HAP)->GetObject<ConstantVelocityMobilityModel>();
-    
     // Save ground station mobility models for angle calculations
     g_mobilityNodeA = nodes.Get(UT_A)->GetObject<MobilityModel>();
     g_mobilityNodeB = nodes.Get(UT_B)->GetObject<MobilityModel>();
