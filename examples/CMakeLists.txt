@@ -31,3 +31,25 @@ build_lib_example(
                        ${libflow-monitor}
                        ${libnetanim}
 )
+
+build_lib_example(
+    NAME hap-sat-hap-simple
+    SOURCE_FILES hap-sat-hap-simple.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libflow-monitor}
+                       ${libnetanim}
+)
+
+build_lib_example(
+    NAME hap-sat-hap
+    SOURCE_FILES hap-sat-hap.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libsatellite}  
+                       ${libflow-monitor}
+                       ${libnetanim}
+)
+
