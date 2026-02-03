@@ -82,6 +82,9 @@ main (int argc, char *argv[])
   // --- WiFi for Group 1 (2.4 GHz, 802.11b) ---
   WifiHelper wifiA;
   wifiA.SetStandard(WIFI_STANDARD_80211b);
+  wifiA.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                                "DataMode", StringValue("DsssRate1Mbps"),
+                                "ControlMode", StringValue("DsssRate1Mbps"));
 
   YansWifiPhyHelper wifiPhyA;
   wifiPhyA.Set("TxPowerStart", DoubleValue(30.0)); // High power for HAP
@@ -103,14 +106,14 @@ main (int argc, char *argv[])
   wifiPhyA.SetChannel(wifiChannelA.Create());
 
   WifiMacHelper wifiMacA;
-  wifiA.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                                "DataMode", StringValue("DsssRate1Mbps"),
-                                "ControlMode", StringValue("DsssRate1Mbps"));
   wifiMacA.SetType("ns3::AdhocWifiMac");
 
   // --- WiFi for Group 2 (5 GHz, 802.11a) ---
   WifiHelper wifiB;
   wifiB.SetStandard(WIFI_STANDARD_80211a);
+  wifiB.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                                "DataMode", StringValue("OfdmRate6Mbps"),
+                                "ControlMode", StringValue("OfdmRate6Mbps"));
 
   YansWifiPhyHelper wifiPhyB;
   wifiPhyB.Set("TxPowerStart", DoubleValue(30.0));
@@ -132,9 +135,6 @@ main (int argc, char *argv[])
   wifiPhyB.SetChannel(wifiChannelB.Create());
 
   WifiMacHelper wifiMacB;
-  wifiB.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                                "DataMode", StringValue("OfdmRate6Mbps"),
-                                "ControlMode", StringValue("OfdmRate6Mbps"));
   wifiMacB.SetType("ns3::AdhocWifiMac");
 
   // --- P2P Satellite Link (HAP <-> GEO Satellite) ---
