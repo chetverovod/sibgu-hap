@@ -231,7 +231,7 @@ int main(int argc, char* argv[])
     devicesA.Add(wifiA.Install(wifiPhyA, wifiMacA, nodes.Get(UT_A))); // Ground A
 
     // Store a pointer to the PHY HAP for Gain control
-    g_phyHapA = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesA.Get(0))->GetPhy());
+    g_phyHapA = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesA.Get(HAP))->GetPhy());
 
 
     // --- Network B Setup (YansWifiPhy) ---
@@ -268,7 +268,7 @@ int main(int argc, char* argv[])
     devicesB.Add(wifiB.Install(wifiPhyB, wifiMacB, nodes.Get(UT_B))); // Ground B
 
     // Store a pointer to the PHY HAP for Gain control
-    g_phyHapB = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesB.Get(0))->GetPhy());
+    g_phyHapB = DynamicCast<YansWifiPhy> (DynamicCast<WifiNetDevice>(devicesB.Get(HAP))->GetPhy());
 
 
     // --- Mobility Setup ---

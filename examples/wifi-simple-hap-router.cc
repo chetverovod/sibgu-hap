@@ -103,6 +103,7 @@ int main(int argc, char* argv[])
 
     YansWifiChannelHelper wifiChannelA;
     wifiChannelA.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+    // Frequency for 2.4GHz 
     wifiChannelA.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),

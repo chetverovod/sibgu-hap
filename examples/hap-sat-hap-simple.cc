@@ -64,12 +64,41 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize, uint32_t pktCo
 int 
 main (int argc, char *argv[])
 {
-  //bool verbose = false;
-  uint32_t packetSize = 1000; // bytes
-  uint32_t numPackets = 1000;
-  Time interPacketInterval = MilliSeconds(10); 
+  // --- General Parameters ---
+  std::string phyModeA("DsssRate1Mbps"); // 802.11b
+  std::string phyModeB("OfdmRate6Mbps"); // 802.11a
+  uint32_t packetSize{1000}; // bytes
+  uint32_t numPackets{10};
+  Time interPacketInterval{"40ms"};
+  bool verbose = false;
   
-  double hapHeight = 20000.0; // 20 km altitude for HAP
+  // HAP Parameters
+  double hight{20000.0};    // meters
+  double Pdbm{20.};       // Transmitter power (dBm)
+  double antGain{20.};    // Antenna gain (dB)
+
+  // Ground separation (distance between terminal A and B on the ground)
+  double groundDistance{5000.0};
+  
+  // Groups ground separation (distance between terminal groups)
+  double groupDistance{100000.0};
+  
+  // Satellite-ground distance
+  double satelliteDistance{35786000.0};
+
+  CommandLine cmd(__FILE__);
+  cmd.AddValue("phyModeA", "Wifi Phy mode Network A (2.4GHz)", phyModeA);
+  cmd.AddValue("phyModeB", "Wifi Phy mode Network B (5GHz)", phyModeB);
+  cmd.AddValue("packetSize", "size of application packet sent", packetSize);
+  cmd.AddValue("numPackets", "number of packets generated", numPackets);
+  cmd.AddValue("interval", "interval between packets", interPacketInterval);
+  cmd.AddValue("verbose", "turn on all WifiNetDevice log components", verbose);
+  cmd.AddValue("hight", "HAP height (m)", hight);
+  cmd.AddValue("txPower", "Power of transmitter, (dBm)", Pdbm);
+  cmd.AddValue("antGain", "Antenna gain for transmitter and reciever, (dB)", antGain);
+  cmd.AddValue("groundDistance", "Distance between ground terminals A and B (m)", groundDistance);
+  cmd.AddValue("groupDistance", "Distance between groups of terminals (m)", groupDistance);
+  cmd.Parse(argc, argv);
 
   // --- 1. Create Nodes ---
   
@@ -81,23 +110,26 @@ main (int argc, char *argv[])
 
   // --- WiFi for Group 1 (2.4 GHz, 802.11b) ---
   WifiHelper wifiA;
+  if (verbose)
+    WifiHelper::EnableLogComponents();
   wifiA.SetStandard(WIFI_STANDARD_80211b);
-  wifiA.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                                "DataMode", StringValue("DsssRate1Mbps"),
-                                "ControlMode", StringValue("DsssRate1Mbps"));
 
   YansWifiPhyHelper wifiPhyA;
-  wifiPhyA.Set("TxPowerStart", DoubleValue(30.0)); // High power for HAP
-  wifiPhyA.Set("TxPowerEnd", DoubleValue(30.0));
+  wifiPhyA.Set("TxGain", DoubleValue(antGain));
+  wifiPhyA.Set("RxGain", DoubleValue(antGain));
+  wifiPhyA.Set("TxPowerStart", DoubleValue(Pdbm)); // High power for HAP
+  wifiPhyA.Set("TxPowerEnd", DoubleValue(Pdbm));
   wifiPhyA.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
 
   YansWifiChannelHelper wifiChannelA;
   wifiChannelA.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+
   wifiChannelA.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(40.0)
                                    );
+  // Frequency for 2.4GHz                                    
   wifiChannelA.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
                                    "m1", DoubleValue(1.0),
@@ -106,22 +138,26 @@ main (int argc, char *argv[])
   wifiPhyA.SetChannel(wifiChannelA.Create());
 
   WifiMacHelper wifiMacA;
+  wifiA.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                              "DataMode", StringValue(phyModeA),
+                              "ControlMode", StringValue(phyModeA));
   wifiMacA.SetType("ns3::AdhocWifiMac");
 
   // --- WiFi for Group 2 (5 GHz, 802.11a) ---
   WifiHelper wifiB;
   wifiB.SetStandard(WIFI_STANDARD_80211a);
-  wifiB.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                                "DataMode", StringValue("OfdmRate6Mbps"),
-                                "ControlMode", StringValue("OfdmRate6Mbps"));
+ 
 
   YansWifiPhyHelper wifiPhyB;
-  wifiPhyB.Set("TxPowerStart", DoubleValue(30.0));
-  wifiPhyB.Set("TxPowerEnd", DoubleValue(30.0));
+  wifiPhyB.Set("TxGain", DoubleValue(antGain));
+  wifiPhyB.Set("RxGain", DoubleValue(antGain));
+  wifiPhyB.Set("TxPowerStart", DoubleValue(Pdbm));
+  wifiPhyB.Set("TxPowerEnd", DoubleValue(Pdbm));
   wifiPhyB.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
 
   YansWifiChannelHelper wifiChannelB;
   wifiChannelB.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+   // Frequency for 5GHz ~ 5.0 or 5.9 GHz 
   wifiChannelB.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
@@ -135,6 +171,9 @@ main (int argc, char *argv[])
   wifiPhyB.SetChannel(wifiChannelB.Create());
 
   WifiMacHelper wifiMacB;
+  wifiB.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                              "DataMode", StringValue(phyModeB),
+                              "ControlMode", StringValue(phyModeB));
   wifiMacB.SetType("ns3::AdhocWifiMac");
 
   // --- P2P Satellite Link (HAP <-> GEO Satellite) ---
@@ -189,17 +228,17 @@ main (int argc, char *argv[])
   Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
 
   // Group 1 Positions (Center at 0,0)
-  positionAlloc->Add(Vector(0.0, 0.0, hapHeight));     // HAP 1
-  positionAlloc->Add(Vector(0.0, 0.0, 0.0));          // UT 1_1
-  positionAlloc->Add(Vector(500.0, 0.0, 0.0));        // UT 1_2
+  positionAlloc->Add(Vector(0.0, 0.0, hight));     // HAP 1
+  positionAlloc->Add(Vector(-groundDistance/2, 0.0, 0.0));  // UT 1_1
+  positionAlloc->Add(Vector(groundDistance/2.0, 0.0, 0.0)); // UT 1_2
 
   // Group 2 Positions (Center at 6000,6000 to separate from Group 1)
-  positionAlloc->Add(Vector(6000.0, 6000.0, hapHeight)); // HAP 2
-  positionAlloc->Add(Vector(6000.0, 6000.0, 0.0));       // UT 2_1
-  positionAlloc->Add(Vector(6500.0, 6000.0, 0.0));      // UT 2_2
+  positionAlloc->Add(Vector(groupDistance, 6000.0, hight)); // HAP 2
+  positionAlloc->Add(Vector(groupDistance - groundDistance/2, 6000.0, 0.0)); // UT 2_1
+  positionAlloc->Add(Vector(groupDistance + groundDistance/2, 6000.0, 0.0)); // UT 2_2
 
   // Satellite Position (Far away in space, doesn't matter much for P2P logic but for completeness)
-  positionAlloc->Add(Vector(35786000.0, 0.0, 0.0));     // Satellite (approx GEO distance)
+  positionAlloc->Add(Vector(satelliteDistance, 0.0, 0.0)); // Satellite (approx GEO distance)
 
   mobility.SetPositionAllocator(positionAlloc);
   mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
@@ -260,7 +299,7 @@ main (int argc, char *argv[])
   std::cout << "  Packet size: " << packetSize << " bytes\n";
   std::cout << "  Number of packets: " << numPackets << "\n";
   std::cout << "  Interval: " << interPacketInterval.GetMilliSeconds() << " ms\n";
-  std::cout << "  Satellite Delay: 130 ms (one way)\n";
+  std::cout << "  Satellite Delay: " << 1000. * satelliteDistance/3E8 << " ms (one way)\n";
 
   for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i)
     {
