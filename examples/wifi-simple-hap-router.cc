@@ -72,7 +72,7 @@ int main(int argc, char* argv[])
     cmd.AddValue("verbose", "turn on all WifiNetDevice log components", verbose);
     cmd.AddValue("hight", "HAP height (m)", hight);
     cmd.AddValue("txPower", "Power of transmitter, (dBm)", Pdbm);
-    cmd.AddValue("antGain", "Antenna gain for transmitter and reciever, (dB)", antGain);
+    cmd.AddValue("antGain", "Antenna gain for transmitter and reciever, (dBi)", antGain);
     cmd.AddValue("groundDistance", "Distance between ground terminals A and B (m)", groundDistance);
     cmd.Parse(argc, argv);
 
@@ -274,8 +274,10 @@ int main(int argc, char* argv[])
     std::cout << "Topology: Ground A (Node 1) <-> HAP (Node 0) <-> Ground B (Node 2)\n";
     std::cout << "Conditions\n";
     std::cout << "  Packet size: " << packetSize << " bytes\n";
+    std::cout << "  Number of packets: " << numPackets << "\n";
     std::cout << "  HAP height: " << hight << " m\n";
     std::cout << "  Tx Power: " << Pdbm << " dBm\n";
+    std::cout << "  Ant Gain: " << antGain << " dBi\n";
     
     for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i)
     {

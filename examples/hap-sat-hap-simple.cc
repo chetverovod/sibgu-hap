@@ -288,7 +288,7 @@ main (int argc, char *argv[])
   Simulator::Stop(Seconds(simTime));
   Simulator::Run();
 
-  // --- 10. Statistics Output ---
+  // --- Statistics ---
   monitor->CheckForLostPackets();
   Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
   std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
@@ -299,7 +299,10 @@ main (int argc, char *argv[])
   std::cout << "  Packet size: " << packetSize << " bytes\n";
   std::cout << "  Number of packets: " << numPackets << "\n";
   std::cout << "  Interval: " << interPacketInterval.GetMilliSeconds() << " ms\n";
-  std::cout << "  Satellite Delay: " << 1000. * satelliteDistance/3E8 << " ms (one way)\n";
+  std::cout << "  HAP height: " << hight << " m\n";
+  std::cout << "  Tx Power: " << Pdbm << " dBm\n";
+  std::cout << "  Ant Gain: " << antGain << " dBi\n";
+  std::cout << "  Satellite Delay: " << 1000. * (satelliteDistance - hight)/3E8 << " ms (one way)\n";
 
   for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i)
     {
