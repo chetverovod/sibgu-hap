@@ -5,8 +5,8 @@
  */
 
 // Scenario: Two groups of HAP-connected terminals linked via GEO Satellite.
-// - Ground-HAP Link: Uses WiFi (AdHoc mode), similar to wifi-moving-hap-router.cc.
-// - HAP-Satellite Link: Uses PointToPoint (High latency).
+// - Ground-HAP Link: Uses WiFi (AdHoc mode).
+// - HAP-Satellite Link: Uses Wireless Channel with LogDistance + Nakagami Fading.
 // - Traffic flows from Group 1 to Group 2 via the satellite backbone.
 
 #include "ns3/core-module.h"
@@ -14,7 +14,7 @@
 #include "ns3/internet-module.h"
 #include "ns3/wifi-module.h"
 #include "ns3/mobility-module.h"
-#include "ns3/point-to-point-module.h"
+// #include "ns3/point-to-point-module.h" // Больше не нужен, так как используем беспроводной канал
 #include "ns3/applications-module.h"
 #include "ns3/ipv4-global-routing-helper.h"
 #include "ns3/flow-monitor-module.h"
@@ -67,6 +67,7 @@ main (int argc, char *argv[])
   // --- General Parameters ---
   std::string phyModeA("DsssRate1Mbps"); // 802.11b
   std::string phyModeB("OfdmRate6Mbps"); // 802.11a
+  std::string satPhyMode("OfdmRate6Mbps"); // 802.11a for space link
   uint32_t packetSize{1000}; // bytes
   uint32_t numPackets{10};
   Time interPacketInterval{"40ms"};
@@ -74,8 +75,11 @@ main (int argc, char *argv[])
   
   // HAP Parameters
   double hight{20000.0};    // meters
-  double Pdbm{20.};       // Transmitter power (dBm)
-  double antGain{20.};    // Antenna gain (dB)
+  double Pdbm{20.};       // Transmitter power (dBm) for Ground/HAP WiFi
+  
+  // Antenna Gain
+  double antGain{20.};    // WiFi Antenna gain (dB)
+  double satAntGain{40.}; // Satellite antenna Gain (dB)
 
   // Ground separation (distance between terminal A and B on the ground)
   double groundDistance{5000.0};
@@ -85,6 +89,9 @@ main (int argc, char *argv[])
   
   // Satellite-ground distance
   double satelliteDistance{35786000.0};
+
+  // Satellite Link Specific Parameters
+  double satTxPower{40.0}; // Power of Satellite/HAP transmitters for space link (dBm)
 
   CommandLine cmd(__FILE__);
   cmd.AddValue("phyModeA", "Wifi Phy mode Network A (2.4GHz)", phyModeA);
@@ -98,15 +105,14 @@ main (int argc, char *argv[])
   cmd.AddValue("antGain", "Antenna gain for transmitter and reciever, (dB)", antGain);
   cmd.AddValue("groundDistance", "Distance between ground terminals A and B (m)", groundDistance);
   cmd.AddValue("groupDistance", "Distance between groups of terminals (m)", groupDistance);
+  cmd.AddValue("satTxPower", "Power for Satellite link (dBm)", satTxPower);
   cmd.Parse(argc, argv);
 
   // --- 1. Create Nodes ---
-  
-  // Total nodes: 2 HAPs + 4 Users + 1 Satellite
   NodeContainer nodes;
   nodes.Create (7);
 
-  // --- 2. Configure WiFi Channel Helpers (Based on wifi-moving-hap-router.cc) ---
+  // --- 2. Configure WiFi Channel Helpers (Ground Links) ---
 
   // --- WiFi for Group 1 (2.4 GHz, 802.11b) ---
   WifiHelper wifiA;
@@ -117,19 +123,16 @@ main (int argc, char *argv[])
   YansWifiPhyHelper wifiPhyA;
   wifiPhyA.Set("TxGain", DoubleValue(antGain));
   wifiPhyA.Set("RxGain", DoubleValue(antGain));
-  wifiPhyA.Set("TxPowerStart", DoubleValue(Pdbm)); // High power for HAP
+  wifiPhyA.Set("TxPowerStart", DoubleValue(Pdbm));
   wifiPhyA.Set("TxPowerEnd", DoubleValue(Pdbm));
   wifiPhyA.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
 
   YansWifiChannelHelper wifiChannelA;
   wifiChannelA.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-
   wifiChannelA.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
-                                   "ReferenceLoss", DoubleValue(40.0)
-                                   );
-  // Frequency for 2.4GHz                                    
+                                   "ReferenceLoss", DoubleValue(40.0));
   wifiChannelA.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
                                    "m1", DoubleValue(1.0),
@@ -146,7 +149,6 @@ main (int argc, char *argv[])
   // --- WiFi for Group 2 (5 GHz, 802.11a) ---
   WifiHelper wifiB;
   wifiB.SetStandard(WIFI_STANDARD_80211a);
- 
 
   YansWifiPhyHelper wifiPhyB;
   wifiPhyB.Set("TxGain", DoubleValue(antGain));
@@ -157,12 +159,10 @@ main (int argc, char *argv[])
 
   YansWifiChannelHelper wifiChannelB;
   wifiChannelB.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-   // Frequency for 5GHz ~ 5.0 or 5.9 GHz 
   wifiChannelB.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
-                                   "ReferenceLoss", DoubleValue(46.7) 
-                                  );
+                                   "ReferenceLoss", DoubleValue(46.7));
   wifiChannelB.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
                                    "m0", DoubleValue(1.0), 
                                    "m1", DoubleValue(1.0),
@@ -176,35 +176,63 @@ main (int argc, char *argv[])
                               "ControlMode", StringValue(phyModeB));
   wifiMacB.SetType("ns3::AdhocWifiMac");
 
-  // --- P2P Satellite Link (HAP <-> GEO Satellite) ---
-  PointToPointHelper p2pSatellite;
-  p2pSatellite.SetDeviceAttribute ("DataRate", StringValue ("10Mbps"));
-  p2pSatellite.SetChannelAttribute ("Delay", StringValue ("130ms"));
+  // --- 3. Configure Satellite Wireless Link ---
+  WifiHelper wifiSat;
+  wifiSat.SetStandard(WIFI_STANDARD_80211a); // Using 5GHz as a base.
 
-  // --- 3. Install NetDevices ---
+  YansWifiPhyHelper wifiPhySat;
+  wifiPhySat.Set("TxGain", DoubleValue(satAntGain)); 
+  wifiPhySat.Set("RxGain", DoubleValue(satAntGain));
+  wifiPhySat.Set("TxPowerStart", DoubleValue(satTxPower));
+  wifiPhySat.Set("TxPowerEnd", DoubleValue(satTxPower));
+  wifiPhySat.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
 
-  // Install WiFi for Group 1 (HAP 1 + Users 1)
-  // Note: HAP needs dual interface: one WiFi (ground), one P2P (sat)
+  YansWifiChannelHelper wifiChannelSat;
+  wifiChannelSat.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+  
+  // --- Accounting for distance losses and fading for the Satellite ---
+  // LogDistance: Model for free space (Exponent=2.0)
+  // ReferenceLoss: For 5GHz at 1m approximately 46.7 dB (as in Group 2)
+  wifiChannelSat.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+                                   "Exponent", DoubleValue(2.0),
+                                   "ReferenceDistance", DoubleValue(1.0),
+                                   "ReferenceLoss", DoubleValue(46.7));
+
+  wifiChannelSat.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
+                                   "m0", DoubleValue(1.0), 
+                                   "m1", DoubleValue(1.0),
+                                   "m2", DoubleValue(1.0));
+
+  wifiPhySat.SetChannel(wifiChannelSat.Create());
+
+  WifiMacHelper wifiMacSat;
+  wifiSat.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                              "DataMode", StringValue(satPhyMode),
+                              "ControlMode", StringValue(satPhyMode));
+  wifiMacSat.SetType("ns3::AdhocWifiMac"); // Adhoc mode for link HAP-Sat
+
+
+  // --- 4. Install NetDevices ---
+
+  // Install WiFi for Group 1
   NetDeviceContainer wifiDevicesA;
   wifiDevicesA = wifiA.Install(wifiPhyA, wifiMacA, NodeContainer(nodes.Get(HAP_1), nodes.Get(UT_1_1), nodes.Get(UT_1_2)));
 
-  // Install WiFi for Group 2 (HAP 2 + Users 2)
+  // Install WiFi for Group 2
   NetDeviceContainer wifiDevicesB;
   wifiDevicesB = wifiB.Install(wifiPhyB, wifiMacB, NodeContainer(nodes.Get(HAP_2), nodes.Get(UT_2_1), nodes.Get(UT_2_2)));
 
-  // Install Satellite P2P Links
-  NetDeviceContainer satLink1;
-  satLink1 = p2pSatellite.Install (nodes.Get (HAP_1), nodes.Get (SATELLITE));
+  // Install Satellite Wireless Devices (HAP 1, HAP 2, Satellite in one network)
+  // we set them all to the same subnet so they can route traffic through each other
+  NetDeviceContainer satDevices;
+  satDevices = wifiSat.Install(wifiPhySat, wifiMacSat, NodeContainer(nodes.Get(HAP_1), nodes.Get(SATELLITE), nodes.Get(HAP_2)));
 
-  NetDeviceContainer satLink2;
-  satLink2 = p2pSatellite.Install (nodes.Get (SATELLITE), nodes.Get (HAP_2));
 
-  // --- 4. Install Internet Stack ---
+  // --- 5. Install Internet Stack ---
   InternetStackHelper stack;
   stack.Install (nodes);
 
-  // --- 5. Assign IP Addresses ---
-  
+  // --- 6. Assign IP Addresses ---
   Ipv4AddressHelper address;
   
   // Network for Group 1 WiFi (10.1.1.0/24)
@@ -215,15 +243,15 @@ main (int argc, char *argv[])
   address.SetBase ("10.1.2.0", "255.255.255.0");
   Ipv4InterfaceContainer interfacesWifiB = address.Assign (wifiDevicesB);
 
-  // Network HAP 1 <-> Satellite (10.1.3.0/30)
-  address.SetBase ("10.1.3.0", "255.255.255.252");
-  Ipv4InterfaceContainer interfacesSat1 = address.Assign (satLink1);
+  // Network for Satellite Wireless (10.1.3.0/24)
+  // All three devices (HAP1, Sat, HAP2) are now in the same
+  // broadcast domain, like in AdHoc
+  address.SetBase ("10.1.3.0", "255.255.255.0");
+  Ipv4InterfaceContainer interfacesSat = address.Assign (satDevices);
+  
+  // Примечание: satDevices.Get(0) - это HAP_1, Get(1) - SATELLITE, Get(2) - HAP_2
 
-  // Network Satellite <-> HAP 2 (10.1.4.0/30)
-  address.SetBase ("10.1.4.0", "255.255.255.252");
-  Ipv4InterfaceContainer interfacesSat2 = address.Assign (satLink2);
-
-  // --- 6. Mobility Setup (Crucial for WiFi) ---
+  // --- 7. Mobility Setup ---
   MobilityHelper mobility;
   Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
 
@@ -232,26 +260,22 @@ main (int argc, char *argv[])
   positionAlloc->Add(Vector(-groundDistance/2, 0.0, 0.0));  // UT 1_1
   positionAlloc->Add(Vector(groundDistance/2.0, 0.0, 0.0)); // UT 1_2
 
-  // Group 2 Positions (Center at 6000,6000 to separate from Group 1)
+  // Group 2 Positions (Center at groupDistance, 6000)
   positionAlloc->Add(Vector(groupDistance, 6000.0, hight)); // HAP 2
   positionAlloc->Add(Vector(groupDistance - groundDistance/2, 6000.0, 0.0)); // UT 2_1
   positionAlloc->Add(Vector(groupDistance + groundDistance/2, 6000.0, 0.0)); // UT 2_2
 
-  // Satellite Position (Far away in space, doesn't matter much for P2P logic but for completeness)
-  positionAlloc->Add(Vector(satelliteDistance, 0.0, 0.0)); // Satellite (approx GEO distance)
+  // Satellite Position
+  positionAlloc->Add(Vector(satelliteDistance, 0.0, 0.0)); // Satellite (GEO)
 
   mobility.SetPositionAllocator(positionAlloc);
   mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   mobility.Install(nodes);
 
-
-  // --- 7. Routing ---
-  // Note: HAPs have multiple interfaces (WiFi + P2P). 
-  // Global Routing is required to forward packets between WiFi and P2P interfaces.
+  // --- 8. Routing ---
   Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
 
-  // --- 8. Applications (Sockets) ---
-  
+  // --- 9. Applications (Sockets) ---
   uint16_t port = 9;
   
   // Create Receiver on Group 2 User (UT_2_1)
@@ -263,17 +287,16 @@ main (int argc, char *argv[])
 
   // Create Source on Group 1 User (UT_1_1)
   Ptr<Socket> source = Socket::CreateSocket(nodes.Get(UT_1_1), tid);
-  // Get the address of UT_2_1 from the WiFi interface container
-  InetSocketAddress remote = InetSocketAddress(interfacesWifiB.GetAddress(1), port); // interfacesWifiB: 0=HAP2, 1=UT2_1, 2=UT2_2
+  InetSocketAddress remote = InetSocketAddress(interfacesWifiB.GetAddress(1), port);
   source->Connect(remote);
 
-  // --- 9. Flow Monitor Setup ---
+  // --- 10. Flow Monitor Setup ---
   FlowMonitorHelper flowmon;
   Ptr<FlowMonitor> monitor = flowmon.InstallAll();
 
   // Start Traffic
   NS_LOG_UNCOND("Testing " << numPackets << " packets sent from Group 1 to Group 2 via GEO Satellite");
-  NS_LOG_UNCOND("Link: WiFi (Ground) <-> P2P (Satellite) <-> WiFi (Ground)");
+  NS_LOG_UNCOND("Link: WiFi (Ground) <-> Wireless Sat Channel (LogDistance+Nakagami) <-> WiFi (Ground)");
   
   Simulator::ScheduleWithContext(source->GetNode()->GetId(),
           Seconds(1.0),
@@ -300,9 +323,10 @@ main (int argc, char *argv[])
   std::cout << "  Number of packets: " << numPackets << "\n";
   std::cout << "  Interval: " << interPacketInterval.GetMilliSeconds() << " ms\n";
   std::cout << "  HAP height: " << hight << " m\n";
-  std::cout << "  Tx Power: " << Pdbm << " dBm\n";
-  std::cout << "  Ant Gain: " << antGain << " dBi\n";
-  std::cout << "  Satellite Delay: " << 1000. * (satelliteDistance - hight)/3E8 << " ms (one way)\n";
+  std::cout << "  Tx Power (Ground): " << Pdbm << " dBm\n";
+  std::cout << "  Tx Power (Sat Link): " << satTxPower << " dBm\n";
+  std::cout << "  Ant Gain (Sat): " << satAntGain << " dBi\n";
+  std::cout << "  Propagation Model: LogDistance + Nakagami (m=1)\n";
 
   for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i)
     {
