@@ -264,9 +264,9 @@ main (int argc, char *argv[])
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(40.0));
   wifiChannelA.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
-                                   "m0", DoubleValue(1.0), 
-                                   "m1", DoubleValue(1.0),
-                                   "m2", DoubleValue(1.0));
+                                   "m0", DoubleValue(10.0), 
+                                   "m1", DoubleValue(10.0),
+                                   "m2", DoubleValue(10.0));
   
   wifiPhyA.SetChannel(wifiChannelA.Create());
 
@@ -294,9 +294,9 @@ main (int argc, char *argv[])
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(46.7));
   wifiChannelB.AddPropagationLoss("ns3::NakagamiPropagationLossModel",
-                                   "m0", DoubleValue(1.0), 
-                                   "m1", DoubleValue(1.0),
-                                   "m2", DoubleValue(1.0));
+                                   "m0", DoubleValue(10.0), 
+                                   "m1", DoubleValue(10.0),
+                                   "m2", DoubleValue(10.0));
 
   wifiPhyB.SetChannel(wifiChannelB.Create());
 
@@ -501,7 +501,6 @@ main (int argc, char *argv[])
 
   NS_LOG_UNCOND("\n=== Starting Ka-band Satellite Simulation ===");
   NS_LOG_UNCOND("HAP is in Stratosphere.");
-  NS_LOG_UNCOND("ACK Timeout increased to 500ms for GEO latency.");
   
   Simulator::ScheduleWithContext(source->GetNode()->GetId(),
           Seconds(1.0),
