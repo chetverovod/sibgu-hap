@@ -148,6 +148,27 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize, uint32_t pktCo
     }
 }
 
+// --- Вспомогательная функция для получения имени узла по IP-адресу ---
+std::string GetNodeNameByIp(Ipv4Address ip, NodeContainer nodes) {
+    for (uint32_t i = 0; i < nodes.GetN(); ++i) {
+        Ptr<Node> node = nodes.Get(i);
+        Ptr<Ipv4> ipv4 = node->GetObject<Ipv4>();
+        if (ipv4) {
+            // Проходим по всем интерфейсам узла
+            for (uint32_t j = 0; j < ipv4->GetNInterfaces(); ++j) {
+                // Проходим по всем адресам на интерфейсе
+                for (uint32_t k = 0; k < ipv4->GetNAddresses(j); ++k) {
+                    if (ipv4->GetAddress(j, k).GetLocal() == ip) {
+                        // Нашли совпадение IP, возвращаем имя узла по его ID
+                        return GetNodeName(i);
+                    }
+                }
+            }
+        }
+    }
+    return "Unknown Node";
+}
+
 int 
 main (int argc, char *argv[])
 {
@@ -578,7 +599,6 @@ main (int argc, char *argv[])
   }
   std::cout << std::string(85, '-') << std::endl;
 
-
   // --- Statistics ---
   monitor->CheckForLostPackets();
   Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
@@ -587,36 +607,77 @@ main (int argc, char *argv[])
   std::cout << "\n=== Ka-band Satellite Simulation Results (End-to-End) ===" << std::endl;
   std::cout << "Topology: Ground WiFi <-> HAP (20km) <-> GEO Sat <-> HAP (20km) <-> Ground WiFi" << std::endl;
 
-  for (std::map<FlowId, FlowMonitor::FlowStats>::const_iterator i = stats.begin(); i != stats.end(); ++i)
-    {
-      Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(i->first);
-      std::cout << "\nFlow " << i->first 
-          << " (" << t.sourceAddress << ":" << t.sourcePort << " -> " 
-          << t.destinationAddress << ":" << t.destinationPort << ")" << std::endl;
+  // Заголовок таблицы 
+  std::cout << "\n" << std::left << std::setw(5)  << "Flow"
+            << std::left << std::setw(28) << "Src (IP [Node])"
+            << std::left << std::setw(28) << "Dst (IP [Node])"
+            << std::right << std::setw(6)  << "Tx"
+            << std::right << std::setw(6)  << "Rx"
+            << std::right << std::setw(8)  << "Loss %"
+            << std::right << std::setw(10) << "Thrput(Kbps)"
+            << std::right << std::setw(9)  << "Del(ms)"
+            << std::right << std::setw(9)  << "Jit(ms)" << std::endl;
+            
+  std::cout << std::string(109, '-') << std::endl; // Новая длина линии
 
-      std::cout << "  Tx Packets: " << i->second.txPackets << std::endl;
-      std::cout << "  Rx Packets: " << i->second.rxPackets << std::endl;
-      double lossRatio{100.};
-      if (i->second.txPackets > 0)
-        {
-          double lostPackets = i->second.txPackets - i->second.rxPackets;
-          lossRatio = (lostPackets / i->second.txPackets) * 100.0;
-          std::cout << "  Lost Packets: " << lostPackets << " (" << lossRatio << "%)" << std::endl;
-        }
+  // Вывод данных по каждому потоку
+  for (auto const& [flowId, flowStats] : stats) {
+      Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flowId);
+      
+      // Получаем имена узлов по IP
+      std::string srcNodeName = GetNodeNameByIp(t.sourceAddress, nodes);
+      std::string dstNodeName = GetNodeNameByIp(t.destinationAddress, nodes);
+      
+      // Формируем строки адресов
+      std::stringstream srcSs, dstSs;
+      srcSs << t.sourceAddress << " [" << srcNodeName << "]";
+      dstSs << t.destinationAddress << " [" << dstNodeName << "]";
 
-      if (i->second.rxPackets > 0)
-        {
-             double throughput = i->second.rxBytes * 8.0 / (i->second.timeLastRxPacket.GetSeconds() - i->second.timeFirstTxPacket.GetSeconds());
-             std::cout << "  Throughput: " << throughput / 1024 << " Kbps" << std::endl;
-             double delay = i->second.delaySum.GetSeconds() / i->second.rxPackets;
-             std::cout << "  Avg Delay:  " << delay * 1000 << " ms" << std::endl;
-             double jitter = 0;
-             if (i->second.rxPackets > 1) {
-                 jitter = i->second.jitterSum.GetSeconds() / (i->second.rxPackets - 1);
-             }
-             std::cout << "  Avg Jitter: " << jitter * 1000 << " ms" << std::endl;
-        }
-    }
+      // Расчет потерь
+      double lossRatio = 0.0;
+      if (flowStats.txPackets > 0) {
+          lossRatio = ((double)(flowStats.txPackets - flowStats.rxPackets) / flowStats.txPackets) * 100.0;
+      }
+
+      // Подготовка переменных
+      double throughput = 0.0;
+      double delay = 0.0;
+      double jitter = 0.0;
+      std::string metricPlaceholder = "-";
+
+      if (flowStats.rxPackets > 0) {
+          throughput = (flowStats.rxBytes * 8.0) / (flowStats.timeLastRxPacket.GetSeconds() - flowStats.timeFirstTxPacket.GetSeconds());
+          delay = flowStats.delaySum.GetSeconds() / flowStats.rxPackets;
+          if (flowStats.rxPackets > 1) {
+              jitter = flowStats.jitterSum.GetSeconds() / (flowStats.rxPackets - 1);
+          }
+          
+          // Вывод строки с метриками
+          std::cout << std::left << std::setw(5) << flowId 
+                    << std::left << std::setw(28) << srcSs.str()
+                    << std::left << std::setw(28) << dstSs.str()
+                    << std::right << std::setw(6) << flowStats.txPackets
+                    << std::right << std::setw(6) << flowStats.rxPackets
+                    << std::right << std::setw(7) << std::fixed << std::setprecision(1) << lossRatio << "%"
+                    << std::right << std::setw(10) << std::fixed << std::setprecision(1) << throughput
+                    << std::right << std::setw(9) << std::fixed << std::setprecision(1) << (delay * 1000.0)
+                    << std::right << std::setw(9) << std::fixed << std::setprecision(1) << (jitter * 1000.0) 
+                    << std::endl;
+      } else {
+          // Вывод строки, если Rx = 0
+          std::cout << std::left << std::setw(5) << flowId 
+                    << std::left << std::setw(28) << srcSs.str()
+                    << std::left << std::setw(28) << dstSs.str()
+                    << std::right << std::setw(6) << flowStats.txPackets
+                    << std::right << std::setw(6) << flowStats.rxPackets
+                    << std::right << std::setw(8) << std::fixed << std::setprecision(1) << lossRatio << "%"
+                    << std::right << std::setw(10) << metricPlaceholder 
+                    << std::right << std::setw(9) << metricPlaceholder 
+                    << std::right << std::setw(9) << metricPlaceholder 
+                    << std::endl;
+      }
+  }
+  std::cout << std::string(109, '-') << std::endl;
 
   monitor->SerializeToXmlFile("hap-sat-ka-band-stats.xml", true, true);
   std::cout << "\n=== End of Simulation ===" << std::endl;
