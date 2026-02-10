@@ -27,6 +27,7 @@
 #include "ns3/propagation-loss-model.h"
 #include <map>
 #include <iostream>
+#include <iomanip>
 
 using namespace ns3;
 
@@ -52,6 +53,7 @@ struct LinkStats {
     uint32_t txPackets = 0;       // Отправлено пакетов (Phy Tx)
     uint32_t rxPacketsSuccess = 0;// Успешно принято пакетов (Mac Rx)
     uint32_t rxDropped = 0;       // Потеряно пакетов на уровне PHY (Phy Rx Drop)
+    std::map<std::string, uint32_t> dropReasons;
 };
 
 // Глобальные карты для хранения статистики и имен устройств
@@ -99,7 +101,9 @@ void PhyRxDropCallback(Ptr<NetDevice> device, Ptr<const Packet> packet, WifiPhyR
     g_statsMap[device].rxDropped++;
     
     // Раскомментируйте строку ниже, если хотите видеть причину для каждого пакета в логе (много текста)
-     NS_LOG_UNCOND("Drop on " << g_deviceNames[device] << " Reason: " << GetRxDropReasonName(reason));
+    // NS_LOG_UNCOND("Drop on " << g_deviceNames[device] << " Reason: " << GetRxDropReasonName(reason));
+    std::string reasonName = GetRxDropReasonName(reason);
+    g_statsMap[device].dropReasons[reasonName]++;
 }
 
 // --- Функция настройки трассировки ---
@@ -491,6 +495,7 @@ main (int argc, char *argv[])
   Simulator::Run();
 
   // --- Link Level Statistics Output ---
+  /*
   std::cout << "\n\n=== Per-Device Link Loss Statistics ===" << std::endl;
   std::cout << "Format: Device Name | Tx Pkts | Rx Success | Rx Dropped | Loss Ratio" << std::endl;
   std::cout << "---------------------------------------------------------------------" << std::endl;
@@ -511,6 +516,68 @@ main (int argc, char *argv[])
                 << " | Loss: " << lossRatio << "%" << std::endl;
   }
   std::cout << "---------------------------------------------------------------------" << std::endl;
+*/
+  // --- Link Level Statistics Output ---
+  std::cout << "\n\n=== Per-Device Link Loss Statistics ===" << std::endl;
+  
+  // Выводим заголовок таблицы с выравниванием
+  // std::left - выравнивание по левому краю (для имени)
+  // std::right - выравнивание по правому краю (для цифр)
+  // std::setw(N) - задает ширину поля в N символов
+  std::cout << std::left << std::setw(45) << "Device Name" 
+            << std::right << std::setw(10) << "Tx Pkts" 
+            << std::right << std::setw(12) << "Rx Succ" 
+            << std::right << std::setw(12) << "Rx Drop" 
+            << std::right << std::setw(12) << "Loss %" << std::endl;
+            
+  std::cout << std::string(91, '-') << std::endl; // Линия-разделитель
+  
+  for (auto const& [device, name] : g_deviceNames) {
+      LinkStats stats = g_statsMap[device];
+      double lossRatio = 0.0;
+      double inboundTotal = stats.rxPacketsSuccess + stats.rxDropped;
+      
+      if (inboundTotal > 0) {
+          lossRatio = (stats.rxDropped / inboundTotal) * 100.0;
+      }
+
+      // Выводим данные с тем же выравниванием, что и заголовок
+      // std::fixed и std::setprecision(2) ограничивают дробную часть до 2 знаков
+      std::cout << std::left << std::setw(45) << name 
+                << std::right << std::setw(10) << stats.txPackets
+                << std::right << std::setw(12) << stats.rxPacketsSuccess 
+                << std::right << std::setw(12) << stats.rxDropped 
+                << std::right << std::setw(11) << std::fixed << std::setprecision(2) << lossRatio << "%" 
+                << std::endl;
+  }
+  std::cout << std::string(91, '-') << std::endl;
+
+
+  // --- ТАБЛИЦА: Детализация причин потерь ---
+  std::cout << "\n=== Packet Drop Reasons Breakdown ===" << std::endl;
+  
+  std::cout << std::left << std::setw(45) << "Device Name" 
+            << std::setw(30) << "Drop Reason" 
+            << std::right << std::setw(10) << "Count" << std::endl;
+            
+  std::cout << std::string(85, '-') << std::endl;
+  
+  // Проходим по всем устройствам
+  for (auto const& [device, name] : g_deviceNames) {
+      LinkStats stats = g_statsMap[device];
+      
+      // Если у этого устройства есть потери
+      if (!stats.dropReasons.empty()) {
+          // Проходим по всем причинам для этого устройства
+          for (auto const& [reason, count] : stats.dropReasons) {
+              std::cout << std::left << std::setw(45) << name 
+                        << std::setw(30) << reason 
+                        << std::right << std::setw(10) << count << std::endl;
+          }
+      }
+  }
+  std::cout << std::string(85, '-') << std::endl;
+
 
   // --- Statistics ---
   monitor->CheckForLostPackets();
