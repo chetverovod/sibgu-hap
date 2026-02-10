@@ -58,6 +58,20 @@ struct LinkStats {
 std::map<Ptr<NetDevice>, LinkStats> g_statsMap;
 std::map<Ptr<NetDevice>, std::string> g_deviceNames;
 
+// --- Вспомогательная функция для получения имени узла по его ID ---
+std::string GetNodeName(uint32_t id) {
+    switch (id) {
+        case HAP_1:   return "HAP_1";
+        case UT_1_1:  return "UT_1_1";
+        case UT_1_2:  return "UT_1_2";
+        case HAP_2:   return "HAP_2";
+        case UT_2_1:  return "UT_2_1";
+        case UT_2_2:  return "UT_2_2";
+        case SATELLITE: return "SATELLITE";
+        default:      return "Unknown Node";
+    }
+}
+
 // --- Вспомогательная функция для расшифровки причины потери (версия ns-3.43) ---
 std::string GetRxDropReasonName(WifiPhyRxfailureReason reason) {
     switch (reason) {
@@ -94,9 +108,10 @@ void SetupDeviceTraces(NetDeviceContainer devices, std::string linkName) {
         Ptr<NetDevice> dev = devices.Get(i);
         Ptr<Node> node = dev->GetNode();
         std::stringstream ss;
-        ss << linkName << " (Node " << node->GetId() << ")";
+        // <-- НОВАЯ СТРОКА (используем имя узла) -->
+        ss << linkName << " [Node: " << GetNodeName(node->GetId()) << "]";
         g_deviceNames[dev] = ss.str();
-
+        
         Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(dev);
         if (wifiDev) {
             wifiDev->GetPhy()->TraceConnectWithoutContext("PhyTxBegin", MakeBoundCallback(&PhyTxBeginCallback, dev));
@@ -292,8 +307,8 @@ main (int argc, char *argv[])
   // ИСПРАВЛЕНИЕ: Явная настройка порогов чувствительности
   // По умолчанию пороги могут быть слишком высокими (например, -86 дБм).
   // Мы снижаем их до -100 дБм, чтобы гарантировать прием при -48 дБм.
-  wifiPhySat.Set("RxSensitivity", DoubleValue(-100.0)); 
-  wifiPhySat.Set("CcaEdThreshold", DoubleValue(-100.0)); 
+  //wifiPhySat.Set("RxSensitivity", DoubleValue(-86.0)); 
+  //wifiPhySat.Set("CcaEdThreshold", DoubleValue(-86.0)); 
   
   // Явно устанавливаем частоту на PHY (30000 MHz), чтобы избежать конфликтов стандартов
   // fail! wifiPhySat.Set("Frequency", UintegerValue(30000));
