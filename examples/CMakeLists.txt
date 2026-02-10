@@ -43,6 +43,17 @@ build_lib_example(
 )
 
 build_lib_example(
+    NAME hap-sat-hap-simple_2
+    SOURCE_FILES hap-sat-hap-simple_2.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libflow-monitor}
+                       ${libnetanim}
+)
+
+
+build_lib_example(
     NAME hap-sat-hap
     SOURCE_FILES hap-sat-hap.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
