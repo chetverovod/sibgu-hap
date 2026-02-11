@@ -15,7 +15,7 @@
 // 3. FIX FOR PACKET LOSS: Increased AckTimeout to handle GEO latency (~240ms RTT).
 // 4. Reduced Data Rate to 6Mbps for robustness at high frequency/long distance.
 // 5. ADDED: Per-link packet loss monitoring via Phy/Mac traces.
-
+#include "ns3/ipv4-static-routing-helper.h"
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
 #include "ns3/internet-module.h"
@@ -175,7 +175,7 @@ main (int argc, char *argv[])
   // --- General Parameters ---
   std::string phyModeA("DsssRate1Mbps"); // 802.11b
   std::string phyModeB("OfdmRate6Mbps"); // 802.11a
-  uint32_t packetSize{1000}; // bytes
+  uint32_t packetSize{1500}; // bytes
   uint32_t numPackets{10};
   Time interPacketInterval{"40ms"};
   bool verbose = false;
@@ -228,15 +228,6 @@ main (int argc, char *argv[])
   cmd.AddValue("frequency", "Satellite link frequency (Hz)", frequency);
   cmd.AddValue("rainAttenuation", "Rain attenuation in dB/km", rainAttenuation);
   cmd.Parse(argc, argv);
-
-  // Увеличиваем Slot Time до 1E6 микросекунд.
-  // Это автоматически увеличит AckTimeout, так как он вычисляется на основе Slot.
-  // RTT на 20км ~ 137 мкс. 150 мкс достаточно для подтверждения.
-  Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/$ns3::WifiPhy/Slot", TimeValue (MicroSeconds (2E6)));
-
-  // 2. Увеличиваем SIFS (Short Interframe Space) пропорционально для надежности.
-  Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Phy/$ns3::WifiPhy/Sifs", TimeValue (MicroSeconds (2E6)));
-
 
   // --- 1. Create Nodes ---
   NodeContainer nodes;
@@ -306,95 +297,149 @@ main (int argc, char *argv[])
                               "ControlMode", StringValue(phyModeB));
   wifiMacB.SetType("ns3::AdhocWifiMac");
 
+  // --- 3. Configure Ka-band Satellite Wireless Links (Final Stable Config) ---
 
-  // --- 3. Configure Ka-band Satellite Wireless Link ---
+  // Общие настройки Wifi для спутника
   WifiHelper wifiSat;
   wifiSat.SetStandard(WIFI_STANDARD_80211a);
-
-  YansWifiPhyHelper wifiPhySat;
-  wifiPhySat.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
-
-  // Create satellite channel with Ka-band specific models
-  YansWifiChannelHelper wifiChannelSat;
-  wifiChannelSat.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
   
-  // Используем ТОЛЬКО LogDistancePropagationLossModel (без Nakagami)
+  WifiMacHelper wifiMacSat;
+  
+  // Настраиваем RemoteStationManager.
+  // Отключаем RTS/CTS для ускорения (пакет 1500 байт).
+  // НЕ настраиваем MinCw/MaxCw/AckTimeout, так как они вызывают ошибки компиляции/запуска.
+  wifiSat.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                              "DataMode", StringValue("OfdmRate6Mbps"), 
+                              "ControlMode", StringValue("OfdmRate6Mbps"),
+                              "RtsCtsThreshold", UintegerValue(2200));
+
+  wifiMacSat.SetType("ns3::AdhocWifiMac");
+
+  // --- UPLINK CHANNEL (HAP -> Satellite) ---
+  YansWifiPhyHelper wifiPhySatUp;
+  wifiPhySatUp.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
+  
+  // НАСТРОЙКА ЗАДЕРЖКИ:
+  // Slot = 150ms.
+  // DIFS = 2 * Slot = 300ms.
+  // Этого достаточно, чтобы "растянуть" внутренние таймеры MAC и дождаться ACK с RTT 240ms.
+  // Скорость будет низкой из-за больших пауз, но потерь не будет.
+  wifiPhySatUp.Set("Sifs", TimeValue(MicroSeconds(16))); 
+  wifiPhySatUp.Set("Slot", TimeValue(MilliSeconds(150))); 
+
+  YansWifiChannelHelper wifiChannelSatUp;
+  wifiChannelSatUp.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+  
   double referenceLossKa = 20 * log10(frequency) + 20 * log10(4 * M_PI / 3e8) + 20 * log10(1);
-  
-  wifiChannelSat.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+  wifiChannelSatUp.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
                                    "ReferenceDistance", DoubleValue(1.0),
                                    "ReferenceLoss", DoubleValue(referenceLossKa));
+  wifiPhySatUp.SetChannel(wifiChannelSatUp.Create());
 
-  Ptr<YansWifiChannel> satChannel = wifiChannelSat.Create();
-  wifiPhySat.SetChannel(satChannel);
-
-  // ИСПРАВЛЕНИЕ: Явная настройка порогов чувствительности
-  // По умолчанию пороги могут быть слишком высокими (например, -86 дБм).
-  // Мы снижаем их до -100 дБм, чтобы гарантировать прием при -48 дБм.
-  //wifiPhySat.Set("RxSensitivity", DoubleValue(-86.0)); 
-  //wifiPhySat.Set("CcaEdThreshold", DoubleValue(-86.0)); 
+  // --- DOWNLINK CHANNEL (Satellite -> HAP) ---
+  YansWifiPhyHelper wifiPhySatDown;
+  wifiPhySatDown.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
   
-  // Явно устанавливаем частоту на PHY (30000 MHz), чтобы избежать конфликтов стандартов
-  // fail! wifiPhySat.Set("Frequency", UintegerValue(30000));
+  wifiPhySatDown.Set("Sifs", TimeValue(MicroSeconds(16)));
+  wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(150)));
 
-  WifiMacHelper wifiMacSat;
-  wifiSat.SetRemoteStationManager("ns3::ConstantRateWifiManager",
-                              "DataMode", StringValue("OfdmRate6Mbps"), 
-                              "ControlMode", StringValue("OfdmRate6Mbps"));
-  wifiMacSat.SetType("ns3::AdhocWifiMac");
+  YansWifiChannelHelper wifiChannelSatDown;
+  wifiChannelSatDown.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
+  wifiChannelSatDown.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+                                   "Exponent", DoubleValue(2.0),
+                                   "ReferenceDistance", DoubleValue(1.0),
+                                   "ReferenceLoss", DoubleValue(referenceLossKa));
+  wifiPhySatDown.SetChannel(wifiChannelSatDown.Create());
 
-  // --- 4. Install NetDevices ---
+  // --- 4. Install NetDevices with Bidirectional Links ---
+  
+  // Установка наземных устройств
   NetDeviceContainer wifiDevicesA;
   wifiDevicesA = wifiA.Install(wifiPhyA, wifiMacA, NodeContainer(nodes.Get(HAP_1), nodes.Get(UT_1_1), nodes.Get(UT_1_2)));
 
   NetDeviceContainer wifiDevicesB;
   wifiDevicesB = wifiB.Install(wifiPhyB, wifiMacB, NodeContainer(nodes.Get(HAP_2), nodes.Get(UT_2_1), nodes.Get(UT_2_2)));
 
-  NetDeviceContainer satDevices;
-  
-  // Install on HAP 1
-  wifiPhySat.Set("TxGain", DoubleValue(hapSatAntGain));
-  wifiPhySat.Set("RxGain", DoubleValue(hapSatAntGain));
-  wifiPhySat.Set("TxPowerStart", DoubleValue(hapSatTxPower));
-  wifiPhySat.Set("TxPowerEnd", DoubleValue(hapSatTxPower));
-  satDevices.Add(wifiSat.Install(wifiPhySat, wifiMacSat, nodes.Get(HAP_1)));
-  
-  // Install on Satellite
-  wifiPhySat.Set("TxGain", DoubleValue(satAntGain));
-  wifiPhySat.Set("RxGain", DoubleValue(satAntGain));
-  wifiPhySat.Set("TxPowerStart", DoubleValue(satTxPower));
-  wifiPhySat.Set("TxPowerEnd", DoubleValue(satTxPower));
-  satDevices.Add(wifiSat.Install(wifiPhySat, wifiMacSat, nodes.Get(SATELLITE)));
-  
-  // Install on HAP 2
-  wifiPhySat.Set("TxGain", DoubleValue(hapSatAntGain));
-  wifiPhySat.Set("RxGain", DoubleValue(hapSatAntGain));
-  wifiPhySat.Set("TxPowerStart", DoubleValue(hapSatTxPower));
-  wifiPhySat.Set("TxPowerEnd", DoubleValue(hapSatTxPower));
-  satDevices.Add(wifiSat.Install(wifiPhySat, wifiMacSat, nodes.Get(HAP_2)));
-/*
-  // --- 4. Install NetDevices ---
-*/
+  // Контейнеры
+  NetDeviceContainer satDevicesUp;    
+  NetDeviceContainer satDevicesDown;  
+  NetDeviceContainer hapDevicesUp;    
+  NetDeviceContainer hapDevicesDown;  
 
-  // --- 4.5. Setup Link Traces (MONITORING) ---
-  // Настраиваем сбор статистики для каждой группы устройств
+  // --- Настройка Uplink ---
+  wifiPhySatUp.Set("TxGain", DoubleValue(hapSatAntGain));
+  wifiPhySatUp.Set("RxGain", DoubleValue(hapSatAntGain));
+  wifiPhySatUp.Set("TxPowerStart", DoubleValue(hapSatTxPower));
+  wifiPhySatUp.Set("TxPowerEnd", DoubleValue(hapSatTxPower));
+  hapDevicesUp.Add(wifiSat.Install(wifiPhySatUp, wifiMacSat, nodes.Get(HAP_1)));
+  hapDevicesUp.Add(wifiSat.Install(wifiPhySatUp, wifiMacSat, nodes.Get(HAP_2)));
+
+  wifiPhySatUp.Set("TxGain", DoubleValue(satAntGain)); 
+  wifiPhySatUp.Set("RxGain", DoubleValue(satAntGain));
+  wifiPhySatUp.Set("TxPowerStart", DoubleValue(satTxPower));
+  wifiPhySatUp.Set("TxPowerEnd", DoubleValue(satTxPower));
+  satDevicesUp.Add(wifiSat.Install(wifiPhySatUp, wifiMacSat, nodes.Get(SATELLITE)));
+
+  // --- Настройка Downlink ---
+  wifiPhySatDown.Set("TxGain", DoubleValue(satAntGain));
+  wifiPhySatDown.Set("RxGain", DoubleValue(satAntGain)); 
+  wifiPhySatDown.Set("TxPowerStart", DoubleValue(satTxPower));
+  wifiPhySatDown.Set("TxPowerEnd", DoubleValue(satTxPower));
+  satDevicesDown.Add(wifiSat.Install(wifiPhySatDown, wifiMacSat, nodes.Get(SATELLITE)));
+
+  wifiPhySatDown.Set("TxGain", DoubleValue(hapSatAntGain)); 
+  wifiPhySatDown.Set("RxGain", DoubleValue(hapSatAntGain));
+  wifiPhySatDown.Set("TxPowerStart", DoubleValue(hapSatTxPower));
+  wifiPhySatDown.Set("TxPowerEnd", DoubleValue(hapSatTxPower));
+  hapDevicesDown.Add(wifiSat.Install(wifiPhySatDown, wifiMacSat, nodes.Get(HAP_1)));
+  hapDevicesDown.Add(wifiSat.Install(wifiPhySatDown, wifiMacSat, nodes.Get(HAP_2)));
+
+  // Объединяем устройства
+  NetDeviceContainer allSatDevices;
+  allSatDevices.Add(satDevicesUp);
+  allSatDevices.Add(satDevicesDown);
+  allSatDevices.Add(hapDevicesUp);
+  allSatDevices.Add(hapDevicesDown);
+
+  // --- 4.5. Setup Link Traces ---
   SetupDeviceTraces(wifiDevicesA, "WiFi-A (Ground 1)");
   SetupDeviceTraces(wifiDevicesB, "WiFi-B (Ground 2)");
-  SetupDeviceTraces(satDevices, "Ka-Sat");
+  SetupDeviceTraces(allSatDevices, "Ka-Sat");
+
 
   // --- 5. Install Internet Stack ---
   InternetStackHelper stack;
   stack.Install (nodes);
-
-  // --- 6. Assign IP Addresses ---
+  
+   // --- 6. Assign IP Addresses ---
   Ipv4AddressHelper address;
+  
+  // Наземные сети
   address.SetBase ("10.1.1.0", "255.255.255.0");
   Ipv4InterfaceContainer interfacesWifiA = address.Assign (wifiDevicesA);
   address.SetBase ("10.1.2.0", "255.255.255.0");
   Ipv4InterfaceContainer interfacesWifiB = address.Assign (wifiDevicesB);
+  
+  // Спутниковые сети
+  
+  // --- UPLINK NETWORK (10.1.3.0) ---
+  // Объединяем передатчики (HAP) и приемник (Спутник) в одну группу
+  NetDeviceContainer uplinkNetworkDevices;
+  uplinkNetworkDevices.Add(hapDevicesUp); // HAP 1 & 2
+  uplinkNetworkDevices.Add(satDevicesUp); // Satellite
+  
   address.SetBase ("10.1.3.0", "255.255.255.0");
-  Ipv4InterfaceContainer interfacesSat = address.Assign (satDevices);
+  Ipv4InterfaceContainer interfacesSatUp = address.Assign (uplinkNetworkDevices); 
+  
+  // --- DOWNLINK NETWORK (10.1.4.0) ---
+  // Объединяем передатчик (Спутник) и приемники (HAP) в одну группу
+  NetDeviceContainer downlinkNetworkDevices;
+  downlinkNetworkDevices.Add(satDevicesDown); // Satellite
+  downlinkNetworkDevices.Add(hapDevicesDown); // HAP 1 & 2
+  
+  address.SetBase ("10.1.4.0", "255.255.255.0");
+  Ipv4InterfaceContainer interfacesSatDown = address.Assign (downlinkNetworkDevices);  
 
   // --- 7. Mobility Setup ---
   MobilityHelper mobility;
@@ -480,7 +525,73 @@ main (int argc, char *argv[])
   NS_LOG_UNCOND("Received Power at HAP: " << receivedPower << " dBW (" << (receivedPower + 30) << " dBm)");
 
   // --- 9. Routing ---
-  Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
+  // не может построить путь Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
+    // --- 9. Routing (Static Routing) ---
+  // Используем статическую маршрутизацию вместо GlobalRouting, чтобы избежать 
+  // конфликта "равноценных путей" (ECMP), который вызывает сбой assertion.
+  
+  Ipv4StaticRoutingHelper staticRoutingHelper;
+
+  // --- Маршрутизация для наземных терминалов (UTs) ---
+  
+  // UT_1_1 и UT_1_2 отправляют всё на HAP_1 (шлюз по умолчанию)
+  Ptr<Ipv4> ipv4Ut1_1 = nodes.Get(UT_1_1)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srUt1_1 = staticRoutingHelper.GetStaticRouting(ipv4Ut1_1);
+  srUt1_1->SetDefaultRoute(interfacesWifiA.GetAddress(0), ipv4Ut1_1->GetInterfaceForAddress(interfacesWifiA.GetAddress(1)));
+
+  Ptr<Ipv4> ipv4Ut1_2 = nodes.Get(UT_1_2)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srUt1_2 = staticRoutingHelper.GetStaticRouting(ipv4Ut1_2);
+  srUt1_2->SetDefaultRoute(interfacesWifiA.GetAddress(0), ipv4Ut1_2->GetInterfaceForAddress(interfacesWifiA.GetAddress(2)));
+
+  // UT_2_1 и UT_2_2 отправляют всё на HAP_2
+  Ptr<Ipv4> ipv4Ut2_1 = nodes.Get(UT_2_1)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srUt2_1 = staticRoutingHelper.GetStaticRouting(ipv4Ut2_1);
+  srUt2_1->SetDefaultRoute(interfacesWifiB.GetAddress(0), ipv4Ut2_1->GetInterfaceForAddress(interfacesWifiB.GetAddress(1)));
+
+  Ptr<Ipv4> ipv4Ut2_2 = nodes.Get(UT_2_2)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srUt2_2 = staticRoutingHelper.GetStaticRouting(ipv4Ut2_2);
+  srUt2_2->SetDefaultRoute(interfacesWifiB.GetAddress(0), ipv4Ut2_2->GetInterfaceForAddress(interfacesWifiB.GetAddress(2)));
+
+
+  // --- Маршрутизация для HAP 1 ---
+  // HAP 1 знает, что сеть 10.1.2.0 (Group 2) доступна через Спутник (через Uplink интерфейс)
+  // Порядок IP в uplinkNetworkDevices: HAP_1 (0), HAP_2 (1), Sat (2)
+  Ptr<Ipv4> ipv4Hap1 = nodes.Get(HAP_1)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srHap1 = staticRoutingHelper.GetStaticRouting(ipv4Hap1);
+  // Dest: 10.1.2.0 (Ground 2), NextHop: Sat Uplink IP (interfacesSatUp.GetAddress(2)), Interface: HAP_1 Uplink
+  srHap1->AddNetworkRouteTo(Ipv4Address("10.1.2.0"), Ipv4Mask("255.255.255.0"), 
+                            interfacesSatUp.GetAddress(2), 
+                            ipv4Hap1->GetInterfaceForAddress(interfacesSatUp.GetAddress(0)));
+
+
+  // --- Маршрутизация для HAP 2 ---
+  // HAP 2 знает, что сеть 10.1.1.0 (Group 1) доступна через Спутник (через Downlink интерфейс)
+  // Порядок IP в downlinkNetworkDevices: Sat (0), HAP_1 (1), HAP_2 (2)
+  Ptr<Ipv4> ipv4Hap2 = nodes.Get(HAP_2)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srHap2 = staticRoutingHelper.GetStaticRouting(ipv4Hap2);
+  // Dest: 10.1.1.0 (Ground 1), NextHop: Sat Downlink IP (interfacesSatDown.GetAddress(0)), Interface: HAP_2 Downlink
+  srHap2->AddNetworkRouteTo(Ipv4Address("10.1.1.0"), Ipv4Mask("255.255.255.0"), 
+                            interfacesSatDown.GetAddress(0), 
+                            ipv4Hap2->GetInterfaceForAddress(interfacesSatDown.GetAddress(2)));
+
+
+  // --- Маршрутизация для Спутника ---
+  // Спутник перенаправляет трафик между HAP 1 и HAP 2
+  Ptr<Ipv4> ipv4Sat = nodes.Get(SATELLITE)->GetObject<Ipv4>();
+  Ptr<Ipv4StaticRouting> srSat = staticRoutingHelper.GetStaticRouting(ipv4Sat);
+
+  // Маршрут к Ground 1 (через Downlink к HAP 1)
+  // NextHop: HAP_1 Downlink IP (interfacesSatDown.GetAddress(1))
+  srSat->AddNetworkRouteTo(Ipv4Address("10.1.1.0"), Ipv4Mask("255.255.255.0"), 
+                           interfacesSatDown.GetAddress(1), 
+                           ipv4Sat->GetInterfaceForAddress(interfacesSatDown.GetAddress(0)));
+
+  // Маршрут к Ground 2 (через Uplink к HAP 2)
+  // NextHop: HAP_2 Uplink IP (interfacesSatUp.GetAddress(1))
+  srSat->AddNetworkRouteTo(Ipv4Address("10.1.2.0"), Ipv4Mask("255.255.255.0"), 
+                           interfacesSatUp.GetAddress(1), 
+                           ipv4Sat->GetInterfaceForAddress(interfacesSatUp.GetAddress(2)));
+
 
   // --- 10. Applications (Sockets) ---
   uint16_t port = 9;
@@ -510,33 +621,11 @@ main (int argc, char *argv[])
           numPackets,
           interPacketInterval);
 
-  double simTime = 1.0 + (numPackets * interPacketInterval.GetSeconds()) + 5.0; 
+  //double simTime = 1.0 + (numPackets * interPacketInterval.GetSeconds()) + 5.0;
+  double simTime = 20.0;  
   Simulator::Stop(Seconds(simTime));
   Simulator::Run();
 
-  // --- Link Level Statistics Output ---
-  /*
-  std::cout << "\n\n=== Per-Device Link Loss Statistics ===" << std::endl;
-  std::cout << "Format: Device Name | Tx Pkts | Rx Success | Rx Dropped | Loss Ratio" << std::endl;
-  std::cout << "---------------------------------------------------------------------" << std::endl;
-  
-  for (auto const& [device, name] : g_deviceNames) {
-      LinkStats stats = g_statsMap[device];
-      double lossRatio = 0.0;
-      double inboundTotal = stats.rxPacketsSuccess + stats.rxDropped;
-      
-      if (inboundTotal > 0) {
-          lossRatio = (stats.rxDropped / inboundTotal) * 100.0;
-      }
-
-      std::cout << name 
-                << " | Tx: " << stats.txPackets
-                << " | Rx Succ: " << stats.rxPacketsSuccess 
-                << " | Rx Drop: " << stats.rxDropped 
-                << " | Loss: " << lossRatio << "%" << std::endl;
-  }
-  std::cout << "---------------------------------------------------------------------" << std::endl;
-*/
   // --- Link Level Statistics Output ---
   std::cout << "\n\n=== Per-Device Link Loss Statistics ===" << std::endl;
   
