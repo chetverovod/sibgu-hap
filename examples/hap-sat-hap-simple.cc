@@ -172,6 +172,9 @@ std::string GetNodeNameByIp(Ipv4Address ip, NodeContainer nodes) {
 int 
 main (int argc, char *argv[])
 {
+  //Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/AckTimeout", TimeValue (MicroSeconds (100)));
+  Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/AdhocWifiMac/AckTimeout", TimeValue (MilliSeconds (300)));
+
   // --- General Parameters ---
   std::string phyModeA("DsssRate1Mbps"); // 802.11b
   std::string phyModeB("OfdmRate6Mbps"); // 802.11a
@@ -314,6 +317,10 @@ main (int argc, char *argv[])
                               "RtsCtsThreshold", UintegerValue(2200));
 
   wifiMacSat.SetType("ns3::AdhocWifiMac");
+ // Time currentDelay = wifiMacSat.GetDefaultMaxPropagationDelay();
+ // NS_LOG_UNCOND("Current max propagation delay: " << 
+ // currentDelay.GetMicroSeconds() << " microseconds");
+
 
   // --- UPLINK CHANNEL (HAP -> Satellite) ---
   YansWifiPhyHelper wifiPhySatUp;
@@ -325,7 +332,8 @@ main (int argc, char *argv[])
   // Этого достаточно, чтобы "растянуть" внутренние таймеры MAC и дождаться ACK с RTT 240ms.
   // Скорость будет низкой из-за больших пауз, но потерь не будет.
   wifiPhySatUp.Set("Sifs", TimeValue(MicroSeconds(16))); 
-  wifiPhySatUp.Set("Slot", TimeValue(MilliSeconds(150))); 
+  //wifiPhySatUp.Set("Slot", TimeValue(MilliSeconds(150))); 
+  wifiPhySatUp.Set("Slot", TimeValue(MilliSeconds(300))); 
 
   YansWifiChannelHelper wifiChannelSatUp;
   wifiChannelSatUp.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
@@ -342,7 +350,8 @@ main (int argc, char *argv[])
   wifiPhySatDown.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
   
   wifiPhySatDown.Set("Sifs", TimeValue(MicroSeconds(16)));
-  wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(150)));
+  //wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(150)));
+  wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(300)));
 
   YansWifiChannelHelper wifiChannelSatDown;
   wifiChannelSatDown.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
@@ -406,6 +415,90 @@ main (int argc, char *argv[])
   SetupDeviceTraces(wifiDevicesA, "WiFi-A (Ground 1)");
   SetupDeviceTraces(wifiDevicesB, "WiFi-B (Ground 2)");
   SetupDeviceTraces(allSatDevices, "Ka-Sat");
+
+// после установки всех устройств и перед SetupDeviceTraces:
+NS_LOG_UNCOND("\n=== Checking Satellite Device Configuration ===");
+
+if (satDevicesUp.GetN() > 0) {
+    Ptr<WifiNetDevice> satDev = DynamicCast<WifiNetDevice>(satDevicesUp.Get(0));
+    if (satDev) {
+        Ptr<WifiPhy> phy = satDev->GetPhy();
+        Ptr<WifiMac> mac = satDev->GetMac();
+        
+        NS_LOG_UNCOND("Satellite Uplink Info:");
+        NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
+        
+        // Получаем параметры через атрибуты (если нужно)
+        NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
+        NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
+    }
+}
+
+if (satDevicesDown.GetN() > 0) {
+    Ptr<WifiNetDevice> satDev = DynamicCast<WifiNetDevice>(satDevicesDown.Get(0));
+    if (satDev) {
+        Ptr<WifiPhy> phy = satDev->GetPhy();
+        Ptr<WifiMac> mac = satDev->GetMac();
+        
+        NS_LOG_UNCOND("Satellite Downlink Info:");
+        NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
+        
+        // Получаем параметры через атрибуты (если нужно)
+        NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
+        NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
+    }
+}
+
+// Проверяем конфигурацию первого HAP спутникового устройства
+if (hapDevicesUp.GetN() > 0) {
+    Ptr<WifiNetDevice> satDev = DynamicCast<WifiNetDevice>(hapDevicesUp.Get(0));
+    if (satDev) {
+        Ptr<WifiPhy> phy = satDev->GetPhy();
+        Ptr<WifiMac> mac = satDev->GetMac();
+        
+        NS_LOG_UNCOND("HAP Satellite Device Uplink Info:");
+        NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
+        NS_LOG_UNCOND("  - PHY Standard: 802.11a");
+        
+        // Получаем параметры через атрибуты (если нужно)
+        NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
+        NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
+    }
+}
+
+if (hapDevicesDown.GetN() > 0) {
+    Ptr<WifiNetDevice> satDev = DynamicCast<WifiNetDevice>(hapDevicesDown.Get(0));
+    if (satDev) {
+        Ptr<WifiPhy> phy = satDev->GetPhy();
+        Ptr<WifiMac> mac = satDev->GetMac();
+        
+        NS_LOG_UNCOND("HAP Satellite Device Downlink Info:");
+        NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
+        NS_LOG_UNCOND("  - PHY Standard: 802.11a");
+        
+        // Получаем параметры через атрибуты (если нужно)
+        NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
+        NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
+    }
+}
+// Аналогично для наземных устройств
+if (wifiDevicesA.GetN() > 0) {
+    Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(wifiDevicesA.Get(0));
+    if (wifiDev) {
+        Ptr<WifiPhy> phy = wifiDev->GetPhy();
+        Ptr<WifiMac> mac = wifiDev->GetMac();
+        NS_LOG_UNCOND("Group 1 WiFi Device Info:");
+        NS_LOG_UNCOND("  - MAC Type: " << wifiDev->GetMac()->GetInstanceTypeId().GetName());
+        NS_LOG_UNCOND("  - PHY Standard: 802.11b");
+        NS_LOG_UNCOND("  - Data Mode: " << phyModeA);
+        
+        // Получаем параметры через атрибуты (если нужно)
+        NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
+        NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
+    }
+}
+
+
 
 
   // --- 5. Install Internet Stack ---
