@@ -753,7 +753,9 @@ if (wifiDevicesA.GetN() > 0) {
   std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
   std::cout << "\n=== Ka-band Satellite Simulation Results (End-to-End) ===" << std::endl;
-  std::cout << "Topology: Ground WiFi <-> HAP (20km) <-> GEO Sat <-> HAP (20km) <-> Ground WiFi" << std::endl;
+  std::cout << "Topology: Ground WiFi <-> HAP (" << hight/1000
+   << "km) <-> GEO Sat <-> HAP ("
+   << hight/1000 << "km) <-> Ground WiFi" << std::endl;
 
   // Заголовок таблицы 
   std::cout << "\n" << std::left << std::setw(5)  << "Flow"
