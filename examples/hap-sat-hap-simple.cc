@@ -15,6 +15,7 @@
 // 3. FIX FOR PACKET LOSS: Increased AckTimeout to handle GEO latency (~240ms RTT).
 // 4. Reduced Data Rate to 6Mbps for robustness at high frequency/long distance.
 // 5. ADDED: Per-link packet loss monitoring via Phy/Mac traces.
+// 6. UPDATED: Flow-based statistics to see exact Source -> Destination loss.
 #include "ns3/ipv4-static-routing-helper.h"
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
@@ -28,6 +29,11 @@
 #include <map>
 #include <iostream>
 #include <iomanip>
+#include <vector>
+#include <algorithm>
+
+// Для работы с заголовками WiFi
+#include "ns3/wifi-mac-header.h"
 
 using namespace ns3;
 
@@ -48,17 +54,18 @@ enum NodeIndices {
     SATELLITE
 };
 
-// --- Структура для хранения статистики по устройству ---
-struct LinkStats {
-    uint32_t txPackets = 0;       // Отправлено пакетов (Phy Tx)
-    uint32_t rxPacketsSuccess = 0;// Успешно принято пакетов (Mac Rx)
-    uint32_t rxDropped = 0;       // Потеряно пакетов на уровне PHY (Phy Rx Drop)
-    std::map<std::string, uint32_t> dropReasons;
+// --- Глобальная карта для сопоставления MAC-адреса и ID узла ---
+std::map<Mac48Address, uint32_t> g_macToNodeId;
+
+// --- Структура для хранения статистики потока (Source -> Destination) ---
+struct FlowLinkStats {
+    uint32_t txPackets = 0;
+    uint32_t rxPackets = 0;
+    uint32_t rxDropped = 0;
 };
 
-// Глобальные карты для хранения статистики и имен устройств
-std::map<Ptr<NetDevice>, LinkStats> g_statsMap;
-std::map<Ptr<NetDevice>, std::string> g_deviceNames;
+// --- Глобальная карта статистики: Key = pair(SrcNodeId, DstNodeId) ---
+std::map<std::pair<uint32_t, uint32_t>, FlowLinkStats> g_flowStats;
 
 // --- Вспомогательная функция для получения имени узла по его ID ---
 std::string GetNodeName(uint32_t id) {
@@ -69,53 +76,83 @@ std::string GetNodeName(uint32_t id) {
         case HAP_2:   return "HAP_2";
         case UT_2_1:  return "UT_2_1";
         case UT_2_2:  return "UT_2_2";
-        case SATELLITE: return "SATELLITE";
-        default:      return "Unknown Node";
+        case SATELLITE: return "SAT";
+        default:      return "Unknown";
     }
 }
 
-// --- Вспомогательная функция для расшифровки причины потери (версия ns-3.43) ---
-std::string GetRxDropReasonName(WifiPhyRxfailureReason reason) {
-    switch (reason) {
-        case WifiPhyRxfailureReason::UNKNOWN: return "Unknown";
-        case WifiPhyRxfailureReason::PREAMBLE_DETECT_FAILURE: return "Preamble Detect Fail";
-        case WifiPhyRxfailureReason::RECEPTION_ABORTED_BY_TX: return "Aborted by TX";
-        // Остальные значения появились в более поздних версиях (3.44+)
-        default: return "Other / Propagation Loss";
+// --- Функция для заполнения карты соответствия MAC-адресов Node ID ---
+void PopulateMacTable(NetDeviceContainer devices) {
+    for (uint32_t i = 0; i < devices.GetN(); ++i) {
+        Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(devices.Get(i));
+        if (wifiDev) {
+            Mac48Address addr = wifiDev->GetMac()->GetAddress();
+            uint32_t nodeId = wifiDev->GetNode()->GetId();
+            g_macToNodeId[addr] = nodeId;
+        }
     }
 }
 
-
-// --- Callbacks for Link Monitoring ---
+// --- Callbacks for Link Monitoring (Flow Based) ---
 
 void PhyTxBeginCallback(Ptr<NetDevice> device, Ptr<const Packet> packet, double txPower) {
-    g_statsMap[device].txPackets++;
+    WifiMacHeader header;
+    packet->PeekHeader(header);
+    
+    Mac48Address destAddr = header.GetAddr1();
+    
+    // Игнорируем широковещательные и групповые пакеты для чистоты таблицы
+    if (destAddr.IsGroup()) return; 
+
+    // Находим ID узла-получателя
+    auto it = g_macToNodeId.find(destAddr);
+    if (it != g_macToNodeId.end()) {
+        uint32_t srcId = device->GetNode()->GetId();
+        uint32_t dstId = it->second;
+        
+        // Увеличиваем счетчик TX для потока Src -> Dst
+        g_flowStats[std::make_pair(srcId, dstId)].txPackets++;
+    }
 }
 
 void MacRxCallback(Ptr<NetDevice> device, Ptr<const Packet> packet) {
-    g_statsMap[device].rxPacketsSuccess++;
+    WifiMacHeader header;
+    packet->PeekHeader(header);
+    
+    Mac48Address srcAddr = header.GetAddr2();
+    
+    // Находим ID узла-отправителя
+    auto it = g_macToNodeId.find(srcAddr);
+    if (it != g_macToNodeId.end()) {
+        uint32_t srcId = it->second;
+        uint32_t dstId = device->GetNode()->GetId();
+        
+        // Увеличиваем счетчик RX для потока Src -> Dst
+        g_flowStats[std::make_pair(srcId, dstId)].rxPackets++;
+    }
 }
 
-// ИЗМЕНЕНО: Вывод причины потери (Reason)
 void PhyRxDropCallback(Ptr<NetDevice> device, Ptr<const Packet> packet, WifiPhyRxfailureReason reason) {
-    g_statsMap[device].rxDropped++;
-    
-    // Раскомментируйте строку ниже, если хотите видеть причину для каждого пакета в логе (много текста)
-    // NS_LOG_UNCOND("Drop on " << g_deviceNames[device] << " Reason: " << GetRxDropReasonName(reason));
-    std::string reasonName = GetRxDropReasonName(reason);
-    g_statsMap[device].dropReasons[reasonName]++;
+    WifiMacHeader header;
+    // Пытаемся прочитать заголовок. При сбое PHY он может быть поврежден, но PeekHeader обычно работает
+    if (packet->PeekHeader(header)) {
+        Mac48Address srcAddr = header.GetAddr2();
+        
+        auto it = g_macToNodeId.find(srcAddr);
+        if (it != g_macToNodeId.end()) {
+            uint32_t srcId = it->second;
+            uint32_t dstId = device->GetNode()->GetId();
+            
+            // Увеличиваем счетчик Drop для потока Src -> Dst
+            g_flowStats[std::make_pair(srcId, dstId)].rxDropped++;
+        }
+    }
 }
 
 // --- Функция настройки трассировки ---
-void SetupDeviceTraces(NetDeviceContainer devices, std::string linkName) {
+void SetupDeviceTraces(NetDeviceContainer devices) {
     for (uint32_t i = 0; i < devices.GetN(); ++i) {
         Ptr<NetDevice> dev = devices.Get(i);
-        Ptr<Node> node = dev->GetNode();
-        std::stringstream ss;
-        // <-- НОВАЯ СТРОКА (используем имя узла) -->
-        ss << linkName << " [Node: " << GetNodeName(node->GetId()) << "]";
-        g_deviceNames[dev] = ss.str();
-        
         Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(dev);
         if (wifiDev) {
             wifiDev->GetPhy()->TraceConnectWithoutContext("PhyTxBegin", MakeBoundCallback(&PhyTxBeginCallback, dev));
@@ -148,34 +185,34 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize, uint32_t pktCo
     }
 }
 
-// --- Вспомогательная функция для получения имени узла по IP-адресу ---
+// --- Вспомогательная функция для получения имени узла по IP-адресу (для FlowMonitor) ---
 std::string GetNodeNameByIp(Ipv4Address ip, NodeContainer nodes) {
     for (uint32_t i = 0; i < nodes.GetN(); ++i) {
         Ptr<Node> node = nodes.Get(i);
         Ptr<Ipv4> ipv4 = node->GetObject<Ipv4>();
         if (ipv4) {
-            // Проходим по всем интерфейсам узла
             for (uint32_t j = 0; j < ipv4->GetNInterfaces(); ++j) {
-                // Проходим по всем адресам на интерфейсе
                 for (uint32_t k = 0; k < ipv4->GetNAddresses(j); ++k) {
                     if (ipv4->GetAddress(j, k).GetLocal() == ip) {
-                        // Нашли совпадение IP, возвращаем имя узла по его ID
                         return GetNodeName(i);
                     }
                 }
             }
         }
     }
-    return "Unknown Node";
+    return "Unknown";
 }
 
 int 
 main (int argc, char *argv[])
 {
-  //Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/Mac/AckTimeout", TimeValue (MicroSeconds (100)));
   Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/AdhocWifiMac/AckTimeout", TimeValue (MilliSeconds (300)));
-
-  // --- General Parameters ---
+  // --- ОТКЛЮЧЕНИЕ РЕТРАНСЛЯЦИЙ (NO RETRIES) ---
+  // Настраиваем количество попыток отправки равным 0.
+  // Устройство отправит пакет 1 раз. Если ACK не придет (а он не придет из-за GEO задержки),
+  // пакет будет считаться потерянным, но повторных попыток не будет.
+  
+// --- General Parameters ---
   std::string phyModeA("DsssRate1Mbps"); // 802.11b
   std::string phyModeB("OfdmRate6Mbps"); // 802.11a
   uint32_t packetSize{1500}; // bytes
@@ -307,37 +344,22 @@ main (int argc, char *argv[])
   wifiSat.SetStandard(WIFI_STANDARD_80211a);
   
   WifiMacHelper wifiMacSat;
-  
-  // Настраиваем RemoteStationManager.
-  // Отключаем RTS/CTS для ускорения (пакет 1500 байт).
-  // НЕ настраиваем MinCw/MaxCw/AckTimeout, так как они вызывают ошибки компиляции/запуска.
   wifiSat.SetRemoteStationManager("ns3::ConstantRateWifiManager",
                               "DataMode", StringValue("OfdmRate6Mbps"), 
                               "ControlMode", StringValue("OfdmRate6Mbps"),
                               "RtsCtsThreshold", UintegerValue(2200));
 
   wifiMacSat.SetType("ns3::AdhocWifiMac");
- // Time currentDelay = wifiMacSat.GetDefaultMaxPropagationDelay();
- // NS_LOG_UNCOND("Current max propagation delay: " << 
- // currentDelay.GetMicroSeconds() << " microseconds");
-
 
   // --- UPLINK CHANNEL (HAP -> Satellite) ---
   YansWifiPhyHelper wifiPhySatUp;
   wifiPhySatUp.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
-  
-  // НАСТРОЙКА ЗАДЕРЖКИ:
-  // Slot = 150ms.
-  // DIFS = 2 * Slot = 300ms.
-  // Этого достаточно, чтобы "растянуть" внутренние таймеры MAC и дождаться ACK с RTT 240ms.
-  // Скорость будет низкой из-за больших пауз, но потерь не будет.
-  wifiPhySatUp.Set("Sifs", TimeValue(MicroSeconds(16))); 
-  //wifiPhySatUp.Set("Slot", TimeValue(MilliSeconds(150))); 
+/*
+wifiPhySatUp.Set("Sifs", TimeValue(MicroSeconds(16))); 
   wifiPhySatUp.Set("Slot", TimeValue(MilliSeconds(300))); 
-
+*/
   YansWifiChannelHelper wifiChannelSatUp;
   wifiChannelSatUp.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-  
   double referenceLossKa = 20 * log10(frequency) + 20 * log10(4 * M_PI / 3e8) + 20 * log10(1);
   wifiChannelSatUp.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
                                    "Exponent", DoubleValue(2.0),
@@ -348,9 +370,7 @@ main (int argc, char *argv[])
   // --- DOWNLINK CHANNEL (Satellite -> HAP) ---
   YansWifiPhyHelper wifiPhySatDown;
   wifiPhySatDown.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
-  
   wifiPhySatDown.Set("Sifs", TimeValue(MicroSeconds(16)));
-  //wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(150)));
   wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(300)));
 
   YansWifiChannelHelper wifiChannelSatDown;
@@ -410,11 +430,21 @@ main (int argc, char *argv[])
   allSatDevices.Add(satDevicesDown);
   allSatDevices.Add(hapDevicesUp);
   allSatDevices.Add(hapDevicesDown);
+  
+  NetDeviceContainer allDevices;
+  allDevices.Add(wifiDevicesA);
+  allDevices.Add(wifiDevicesB);
+  allDevices.Add(allSatDevices);
 
   // --- 4.5. Setup Link Traces ---
-  SetupDeviceTraces(wifiDevicesA, "WiFi-A (Ground 1)");
-  SetupDeviceTraces(wifiDevicesB, "WiFi-B (Ground 2)");
-  SetupDeviceTraces(allSatDevices, "Ka-Sat");
+  
+  // 1. Заполняем таблицу MAC-адресов
+  PopulateMacTable(allDevices);
+  
+  // 2. Подключаем трассировщики
+  SetupDeviceTraces(wifiDevicesA);
+  SetupDeviceTraces(wifiDevicesB);
+  SetupDeviceTraces(allSatDevices);
 
 // после установки всех устройств и перед SetupDeviceTraces:
 NS_LOG_UNCOND("\n=== Checking Satellite Device Configuration ===");
@@ -427,8 +457,6 @@ if (satDevicesUp.GetN() > 0) {
         
         NS_LOG_UNCOND("Satellite Uplink Info:");
         NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
-        
-        // Получаем параметры через атрибуты (если нужно)
         NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
         NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
     }
@@ -442,8 +470,6 @@ if (satDevicesDown.GetN() > 0) {
         
         NS_LOG_UNCOND("Satellite Downlink Info:");
         NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
-        
-        // Получаем параметры через атрибуты (если нужно)
         NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
         NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
     }
@@ -459,8 +485,6 @@ if (hapDevicesUp.GetN() > 0) {
         NS_LOG_UNCOND("HAP Satellite Device Uplink Info:");
         NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
         NS_LOG_UNCOND("  - PHY Standard: 802.11a");
-        
-        // Получаем параметры через атрибуты (если нужно)
         NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
         NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
     }
@@ -475,8 +499,6 @@ if (hapDevicesDown.GetN() > 0) {
         NS_LOG_UNCOND("HAP Satellite Device Downlink Info:");
         NS_LOG_UNCOND("  - MAC Type: " << mac->GetInstanceTypeId().GetName());
         NS_LOG_UNCOND("  - PHY Standard: 802.11a");
-        
-        // Получаем параметры через атрибуты (если нужно)
         NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
         NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
     }
@@ -491,8 +513,6 @@ if (wifiDevicesA.GetN() > 0) {
         NS_LOG_UNCOND("  - MAC Type: " << wifiDev->GetMac()->GetInstanceTypeId().GetName());
         NS_LOG_UNCOND("  - PHY Standard: 802.11b");
         NS_LOG_UNCOND("  - Data Mode: " << phyModeA);
-        
-        // Получаем параметры через атрибуты (если нужно)
         NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
         NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
     }
@@ -517,7 +537,6 @@ if (wifiDevicesA.GetN() > 0) {
   // Спутниковые сети
   
   // --- UPLINK NETWORK (10.1.3.0) ---
-  // Объединяем передатчики (HAP) и приемник (Спутник) в одну группу
   NetDeviceContainer uplinkNetworkDevices;
   uplinkNetworkDevices.Add(hapDevicesUp); // HAP 1 & 2
   uplinkNetworkDevices.Add(satDevicesUp); // Satellite
@@ -526,7 +545,6 @@ if (wifiDevicesA.GetN() > 0) {
   Ipv4InterfaceContainer interfacesSatUp = address.Assign (uplinkNetworkDevices); 
   
   // --- DOWNLINK NETWORK (10.1.4.0) ---
-  // Объединяем передатчик (Спутник) и приемники (HAP) в одну группу
   NetDeviceContainer downlinkNetworkDevices;
   downlinkNetworkDevices.Add(satDevicesDown); // Satellite
   downlinkNetworkDevices.Add(hapDevicesDown); // HAP 1 & 2
@@ -573,31 +591,20 @@ if (wifiDevicesA.GetN() > 0) {
   NS_LOG_UNCOND("Satellite Antenna Gain: " << satAntGain << " dBi");
   NS_LOG_UNCOND("HAP Satellite Antenna Gain: " << hapSatAntGain << " dBi");
   
-  // Calculate Free Space Path Loss (FSPL)
   double fsplHap1Sat = 20 * log10(distanceHap1ToSat) + 20 * log10(frequency) + 20 * log10(4 * M_PI / 3e8);
- // double fsplHap2Sat = 20 * log10(distanceHap2ToSat) + 20 * log10(frequency) + 20 * log10(4 * M_PI / 3e8);
-  
-  // Calculate Atmospheric Losses (Sat -> HAP)
-  
-  // 1. Rain Loss
   double rainLoss = 0.0; 
   if (hight < rainCloudHeight) {
       rainLoss = rainAttenuation * (rainCloudHeight - hight) / 1000.0;
   }
-  
-  // 2. Gas Absorption
   double denseAtmosphereThickness = 20000.0; // meters
   double gasPathLength = 0.0;
-  
   if (hight < denseAtmosphereThickness) {
       gasPathLength = (denseAtmosphereThickness - hight) / 1000.0; // km
   } else {
       gasPathLength = 0.0;
   }
-  
   double oxygenLoss = oxygenAbsorption * gasPathLength;
   double vaporLoss = waterVaporAbsorption * gasPathLength;
-  
   double totalAtmosphericLoss = rainLoss + oxygenLoss + vaporLoss;
   
   NS_LOG_UNCOND("\nPath Loss Calculations (Sat -> HAP):");
@@ -607,7 +614,6 @@ if (wifiDevicesA.GetN() > 0) {
   NS_LOG_UNCOND("Total Atmospheric Loss: " << totalAtmosphericLoss << " dB");
   NS_LOG_UNCOND("Total Path Loss: " << (fsplHap1Sat + totalAtmosphericLoss) << " dB");
   
-  // Calculate link budget
   double eirpSat = satTxPower - 30 + satAntGain; 
   NS_LOG_UNCOND("\nLink Budget (Satellite -> HAP 1):");
   NS_LOG_UNCOND("Satellite EIRP: " << eirpSat << " dBW");
@@ -617,17 +623,10 @@ if (wifiDevicesA.GetN() > 0) {
   double receivedPower = eirpSat - fsplHap1Sat - totalAtmosphericLoss + hapSatAntGain;
   NS_LOG_UNCOND("Received Power at HAP: " << receivedPower << " dBW (" << (receivedPower + 30) << " dBm)");
 
-  // --- 9. Routing ---
-  // не может построить путь Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
-    // --- 9. Routing (Static Routing) ---
-  // Используем статическую маршрутизацию вместо GlobalRouting, чтобы избежать 
-  // конфликта "равноценных путей" (ECMP), который вызывает сбой assertion.
-  
+  // --- 9. Routing (Static Routing) ---
   Ipv4StaticRoutingHelper staticRoutingHelper;
 
   // --- Маршрутизация для наземных терминалов (UTs) ---
-  
-  // UT_1_1 и UT_1_2 отправляют всё на HAP_1 (шлюз по умолчанию)
   Ptr<Ipv4> ipv4Ut1_1 = nodes.Get(UT_1_1)->GetObject<Ipv4>();
   Ptr<Ipv4StaticRouting> srUt1_1 = staticRoutingHelper.GetStaticRouting(ipv4Ut1_1);
   srUt1_1->SetDefaultRoute(interfacesWifiA.GetAddress(0), ipv4Ut1_1->GetInterfaceForAddress(interfacesWifiA.GetAddress(1)));
@@ -636,7 +635,6 @@ if (wifiDevicesA.GetN() > 0) {
   Ptr<Ipv4StaticRouting> srUt1_2 = staticRoutingHelper.GetStaticRouting(ipv4Ut1_2);
   srUt1_2->SetDefaultRoute(interfacesWifiA.GetAddress(0), ipv4Ut1_2->GetInterfaceForAddress(interfacesWifiA.GetAddress(2)));
 
-  // UT_2_1 и UT_2_2 отправляют всё на HAP_2
   Ptr<Ipv4> ipv4Ut2_1 = nodes.Get(UT_2_1)->GetObject<Ipv4>();
   Ptr<Ipv4StaticRouting> srUt2_1 = staticRoutingHelper.GetStaticRouting(ipv4Ut2_1);
   srUt2_1->SetDefaultRoute(interfacesWifiB.GetAddress(0), ipv4Ut2_1->GetInterfaceForAddress(interfacesWifiB.GetAddress(1)));
@@ -645,42 +643,28 @@ if (wifiDevicesA.GetN() > 0) {
   Ptr<Ipv4StaticRouting> srUt2_2 = staticRoutingHelper.GetStaticRouting(ipv4Ut2_2);
   srUt2_2->SetDefaultRoute(interfacesWifiB.GetAddress(0), ipv4Ut2_2->GetInterfaceForAddress(interfacesWifiB.GetAddress(2)));
 
-
   // --- Маршрутизация для HAP 1 ---
-  // HAP 1 знает, что сеть 10.1.2.0 (Group 2) доступна через Спутник (через Uplink интерфейс)
-  // Порядок IP в uplinkNetworkDevices: HAP_1 (0), HAP_2 (1), Sat (2)
   Ptr<Ipv4> ipv4Hap1 = nodes.Get(HAP_1)->GetObject<Ipv4>();
   Ptr<Ipv4StaticRouting> srHap1 = staticRoutingHelper.GetStaticRouting(ipv4Hap1);
-  // Dest: 10.1.2.0 (Ground 2), NextHop: Sat Uplink IP (interfacesSatUp.GetAddress(2)), Interface: HAP_1 Uplink
   srHap1->AddNetworkRouteTo(Ipv4Address("10.1.2.0"), Ipv4Mask("255.255.255.0"), 
                             interfacesSatUp.GetAddress(2), 
                             ipv4Hap1->GetInterfaceForAddress(interfacesSatUp.GetAddress(0)));
 
-
   // --- Маршрутизация для HAP 2 ---
-  // HAP 2 знает, что сеть 10.1.1.0 (Group 1) доступна через Спутник (через Downlink интерфейс)
-  // Порядок IP в downlinkNetworkDevices: Sat (0), HAP_1 (1), HAP_2 (2)
   Ptr<Ipv4> ipv4Hap2 = nodes.Get(HAP_2)->GetObject<Ipv4>();
   Ptr<Ipv4StaticRouting> srHap2 = staticRoutingHelper.GetStaticRouting(ipv4Hap2);
-  // Dest: 10.1.1.0 (Ground 1), NextHop: Sat Downlink IP (interfacesSatDown.GetAddress(0)), Interface: HAP_2 Downlink
   srHap2->AddNetworkRouteTo(Ipv4Address("10.1.1.0"), Ipv4Mask("255.255.255.0"), 
                             interfacesSatDown.GetAddress(0), 
                             ipv4Hap2->GetInterfaceForAddress(interfacesSatDown.GetAddress(2)));
 
-
   // --- Маршрутизация для Спутника ---
-  // Спутник перенаправляет трафик между HAP 1 и HAP 2
   Ptr<Ipv4> ipv4Sat = nodes.Get(SATELLITE)->GetObject<Ipv4>();
   Ptr<Ipv4StaticRouting> srSat = staticRoutingHelper.GetStaticRouting(ipv4Sat);
 
-  // Маршрут к Ground 1 (через Downlink к HAP 1)
-  // NextHop: HAP_1 Downlink IP (interfacesSatDown.GetAddress(1))
   srSat->AddNetworkRouteTo(Ipv4Address("10.1.1.0"), Ipv4Mask("255.255.255.0"), 
                            interfacesSatDown.GetAddress(1), 
                            ipv4Sat->GetInterfaceForAddress(interfacesSatDown.GetAddress(0)));
 
-  // Маршрут к Ground 2 (через Uplink к HAP 2)
-  // NextHop: HAP_2 Uplink IP (interfacesSatUp.GetAddress(1))
   srSat->AddNetworkRouteTo(Ipv4Address("10.1.2.0"), Ipv4Mask("255.255.255.0"), 
                            interfacesSatUp.GetAddress(1), 
                            ipv4Sat->GetInterfaceForAddress(interfacesSatUp.GetAddress(2)));
@@ -714,71 +698,54 @@ if (wifiDevicesA.GetN() > 0) {
           numPackets,
           interPacketInterval);
 
-  //double simTime = 1.0 + (numPackets * interPacketInterval.GetSeconds()) + 5.0;
-  double simTime = 20.0;  
+  double simTime = 1.0 + (numPackets * interPacketInterval.GetSeconds()) + 5.0;
   Simulator::Stop(Seconds(simTime));
   Simulator::Run();
 
-  // --- Link Level Statistics Output ---
-  std::cout << "\n\n=== Per-Device Link Loss Statistics ===" << std::endl;
+  // --- Link Level Statistics Output (Flow Based) ---
+  std::cout << "\n\n=== Per-Flow Link Loss Statistics (Node-to-Node) ===" << std::endl;
   
-  // Выводим заголовок таблицы с выравниванием
-  // std::left - выравнивание по левому краю (для имени)
-  // std::right - выравнивание по правому краю (для цифр)
-  // std::setw(N) - задает ширину поля в N символов
-  std::cout << std::left << std::setw(45) << "Device Name" 
+  // Заголовок таблицы
+  std::cout << std::left << std::setw(30) << "Flow (Source -> Dest)" 
             << std::right << std::setw(10) << "Tx Pkts" 
-            << std::right << std::setw(12) << "Rx Succ" 
-            << std::right << std::setw(12) << "Rx Drop" 
-            << std::right << std::setw(12) << "Loss %" << std::endl;
+            << std::right << std::setw(10) << "Rx Pkts" 
+            << std::right << std::setw(10) << "Rx Drop" 
+            << std::right << std::setw(10) << "Loss %" << std::endl;
             
-  std::cout << std::string(91, '-') << std::endl; // Линия-разделитель
+  std::cout << std::string(70, '-') << std::endl;
   
-  for (auto const& [device, name] : g_deviceNames) {
-      LinkStats stats = g_statsMap[device];
-      double lossRatio = 0.0;
-      double inboundTotal = stats.rxPacketsSuccess + stats.rxDropped;
-      
-      if (inboundTotal > 0) {
-          lossRatio = (stats.rxDropped / inboundTotal) * 100.0;
+  // Создаем вектор для сортировки потоков
+  std::vector<std::pair<uint32_t, uint32_t>> flowKeys;
+  for (auto const& [key, stats] : g_flowStats) {
+      if (stats.txPackets > 0 || stats.rxPackets > 0 || stats.rxDropped > 0) {
+          flowKeys.push_back(key);
       }
+  }
+  
+  // Сортируем: сначала по Source ID, потом по Dest ID
+  std::sort(flowKeys.begin(), flowKeys.end());
 
-      // Выводим данные с тем же выравниванием, что и заголовок
-      // std::fixed и std::setprecision(2) ограничивают дробную часть до 2 знаков
-      std::cout << std::left << std::setw(45) << name 
+  for (auto const& key : flowKeys) {
+      uint32_t srcId = key.first;
+      uint32_t dstId = key.second;
+      FlowLinkStats stats = g_flowStats[key];
+      
+      std::stringstream flowName;
+      flowName << GetNodeName(srcId) << " -> " << GetNodeName(dstId);
+      
+      double lossRatio = 0.0;
+      if (stats.txPackets > 0) {
+          lossRatio = ((double)stats.rxDropped / stats.txPackets) * 100.0;
+      }
+      
+      std::cout << std::left << std::setw(30) << flowName.str() 
                 << std::right << std::setw(10) << stats.txPackets
-                << std::right << std::setw(12) << stats.rxPacketsSuccess 
-                << std::right << std::setw(12) << stats.rxDropped 
-                << std::right << std::setw(11) << std::fixed << std::setprecision(2) << lossRatio << "%" 
+                << std::right << std::setw(10) << stats.rxPackets 
+                << std::right << std::setw(10) << stats.rxDropped 
+                << std::right << std::setw(9) << std::fixed << std::setprecision(1) << lossRatio << "%" 
                 << std::endl;
   }
-  std::cout << std::string(91, '-') << std::endl;
-
-
-  // --- ТАБЛИЦА: Детализация причин потерь ---
-  std::cout << "\n=== Packet Drop Reasons Breakdown ===" << std::endl;
-  
-  std::cout << std::left << std::setw(45) << "Device Name" 
-            << std::setw(30) << "Drop Reason" 
-            << std::right << std::setw(10) << "Count" << std::endl;
-            
-  std::cout << std::string(85, '-') << std::endl;
-  
-  // Проходим по всем устройствам
-  for (auto const& [device, name] : g_deviceNames) {
-      LinkStats stats = g_statsMap[device];
-      
-      // Если у этого устройства есть потери
-      if (!stats.dropReasons.empty()) {
-          // Проходим по всем причинам для этого устройства
-          for (auto const& [reason, count] : stats.dropReasons) {
-              std::cout << std::left << std::setw(45) << name 
-                        << std::setw(30) << reason 
-                        << std::right << std::setw(10) << count << std::endl;
-          }
-      }
-  }
-  std::cout << std::string(85, '-') << std::endl;
+  std::cout << std::string(70, '-') << std::endl;
 
   // --- Statistics ---
   monitor->CheckForLostPackets();
@@ -799,28 +766,24 @@ if (wifiDevicesA.GetN() > 0) {
             << std::right << std::setw(9)  << "Del(ms)"
             << std::right << std::setw(9)  << "Jit(ms)" << std::endl;
             
-  std::cout << std::string(109, '-') << std::endl; // Новая длина линии
+  std::cout << std::string(109, '-') << std::endl;
 
   // Вывод данных по каждому потоку
   for (auto const& [flowId, flowStats] : stats) {
       Ipv4FlowClassifier::FiveTuple t = classifier->FindFlow(flowId);
       
-      // Получаем имена узлов по IP
       std::string srcNodeName = GetNodeNameByIp(t.sourceAddress, nodes);
       std::string dstNodeName = GetNodeNameByIp(t.destinationAddress, nodes);
       
-      // Формируем строки адресов
       std::stringstream srcSs, dstSs;
       srcSs << t.sourceAddress << " [" << srcNodeName << "]";
       dstSs << t.destinationAddress << " [" << dstNodeName << "]";
 
-      // Расчет потерь
       double lossRatio = 0.0;
       if (flowStats.txPackets > 0) {
           lossRatio = ((double)(flowStats.txPackets - flowStats.rxPackets) / flowStats.txPackets) * 100.0;
       }
 
-      // Подготовка переменных
       double throughput = 0.0;
       double delay = 0.0;
       double jitter = 0.0;
@@ -833,7 +796,6 @@ if (wifiDevicesA.GetN() > 0) {
               jitter = flowStats.jitterSum.GetSeconds() / (flowStats.rxPackets - 1);
           }
           
-          // Вывод строки с метриками
           std::cout << std::left << std::setw(5) << flowId 
                     << std::left << std::setw(28) << srcSs.str()
                     << std::left << std::setw(28) << dstSs.str()
@@ -845,7 +807,6 @@ if (wifiDevicesA.GetN() > 0) {
                     << std::right << std::setw(9) << std::fixed << std::setprecision(1) << (jitter * 1000.0) 
                     << std::endl;
       } else {
-          // Вывод строки, если Rx = 0
           std::cout << std::left << std::setw(5) << flowId 
                     << std::left << std::setw(28) << srcSs.str()
                     << std::left << std::setw(28) << dstSs.str()
