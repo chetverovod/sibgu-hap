@@ -370,9 +370,10 @@ wifiPhySatUp.Set("Sifs", TimeValue(MicroSeconds(16)));
   // --- DOWNLINK CHANNEL (Satellite -> HAP) ---
   YansWifiPhyHelper wifiPhySatDown;
   wifiPhySatDown.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
+  /*
   wifiPhySatDown.Set("Sifs", TimeValue(MicroSeconds(16)));
   wifiPhySatDown.Set("Slot", TimeValue(MilliSeconds(300)));
-
+*/
   YansWifiChannelHelper wifiChannelSatDown;
   wifiChannelSatDown.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
   wifiChannelSatDown.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
@@ -503,12 +504,14 @@ if (hapDevicesDown.GetN() > 0) {
         NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
     }
 }
+
 // Аналогично для наземных устройств
 if (wifiDevicesA.GetN() > 0) {
     Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(wifiDevicesA.Get(0));
     if (wifiDev) {
         Ptr<WifiPhy> phy = wifiDev->GetPhy();
         Ptr<WifiMac> mac = wifiDev->GetMac();
+        phy->SetAttribute("Slot", TimeValue(MicroSeconds(70)));
         NS_LOG_UNCOND("Group 1 WiFi Device Info:");
         NS_LOG_UNCOND("  - MAC Type: " << wifiDev->GetMac()->GetInstanceTypeId().GetName());
         NS_LOG_UNCOND("  - PHY Standard: 802.11b");
@@ -518,7 +521,20 @@ if (wifiDevicesA.GetN() > 0) {
     }
 }
 
-
+if (wifiDevicesB.GetN() > 0) {
+    Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(wifiDevicesB.Get(0));
+    if (wifiDev) {
+        Ptr<WifiPhy> phy = wifiDev->GetPhy();
+        Ptr<WifiMac> mac = wifiDev->GetMac();
+        phy->SetAttribute("Slot", TimeValue(MicroSeconds(70)));
+        NS_LOG_UNCOND("Group 2 WiFi Device Info:");
+        NS_LOG_UNCOND("  - MAC Type: " << wifiDev->GetMac()->GetInstanceTypeId().GetName());
+        NS_LOG_UNCOND("  - PHY Standard: 802.11b");
+        NS_LOG_UNCOND("  - Data Mode: " << phyModeB);
+        NS_LOG_UNCOND("  - SIFS: " << phy->GetSifs().GetMicroSeconds() << " μs");
+        NS_LOG_UNCOND("  - Slot: " << phy->GetSlot().GetMicroSeconds() << " μs");
+    }
+}    
 
 
   // --- 5. Install Internet Stack ---
