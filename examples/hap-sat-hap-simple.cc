@@ -208,8 +208,8 @@ main (int argc, char *argv[])
   std::string phyModeA("DsssRate1Mbps"); // 802.11b
   std::string phyModeB("OfdmRate6Mbps"); // 802.11a
   uint32_t packetSize{1500}; 
-  uint32_t numPackets{10};
-  Time interPacketInterval{"40ms"};
+  uint32_t numPackets{1000};
+  Time interPacketInterval{"265ms"};
   bool verbose = false;
   
   double hight{20000.0};    // meters
