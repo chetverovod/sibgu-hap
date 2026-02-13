@@ -202,7 +202,6 @@ std::string GetNodeNameByIp(Ipv4Address ip, NodeContainer nodes) {
 int 
 main (int argc, char *argv[])
 {
-  Config::Set ("/NodeList/*/DeviceList/*/$ns3::WifiNetDevice/AdhocWifiMac/AckTimeout", TimeValue (MilliSeconds (300)));
 
 // --- General Parameters ---
   std::string phyModeA("DsssRate1Mbps"); // 802.11b
@@ -250,6 +249,13 @@ main (int argc, char *argv[])
   cmd.AddValue("hight", "HAP height (m)", hight);
   cmd.Parse(argc, argv);
 
+  std::cout << "Topology: Ground WiFi <-> HAP (" << hight/1000
+   << "km) <-> GEO Sat <-> HAP ("
+   << hight/1000 << "km) <-> Ground WiFi" << std::endl;
+  NS_LOG_UNCOND("Size of application packet: " << packetSize);
+  NS_LOG_UNCOND("Number of packets: " << numPackets);
+  NS_LOG_UNCOND("Interval between packets: "<< interPacketInterval.GetMilliSeconds()  << "ms");
+ 
   // --- 1. Create Nodes ---
   NodeContainer nodes;
   nodes.Create (7);
@@ -660,9 +666,6 @@ main (int argc, char *argv[])
   std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
 
   std::cout << "\n=== Ka-band Satellite Simulation Results (End-to-End) ===" << std::endl;
-  std::cout << "Topology: Ground WiFi <-> HAP (" << hight/1000
-   << "km) <-> GEO Sat <-> HAP ("
-   << hight/1000 << "km) <-> Ground WiFi" << std::endl;
 
   // Header of table 
   std::cout << "\n" << std::left << std::setw(5)  << "Flow"
