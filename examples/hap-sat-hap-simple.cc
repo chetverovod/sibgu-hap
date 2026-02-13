@@ -30,7 +30,7 @@
 #include <vector>
 #include <algorithm>
 
-// Для работы с заголовками WiFi
+// For work with WiFi headers
 #include "ns3/wifi-mac-header.h"
 
 using namespace ns3;
@@ -51,21 +51,19 @@ enum NodeIndices {
     // Satellite
     SATELLITE
 };
-
-// --- Глобальная карта для сопоставления MAC-адреса и ID узла ---
+// --- Global map for MAC address and node ID collation ---
 std::map<Mac48Address, uint32_t> g_macToNodeId;
 
-// --- Структура для хранения статистики потока (Source -> Destination) ---
+// --- Structure for storing stream statistics (Source -> Destination) ---
 struct FlowLinkStats {
     uint32_t txPackets = 0;
     uint32_t rxPackets = 0;
     uint32_t rxDropped = 0;
 };
-
-// --- Глобальная карта статистики: Key = pair(SrcNodeId, DstNodeId) ---
+// --- Global statistics map: Key = pair(SrcNodeId, DstNodeId) ---
 std::map<std::pair<uint32_t, uint32_t>, FlowLinkStats> g_flowStats;
 
-// --- Вспомогательная функция для получения имени узла по его ID ---
+// --- Helper function for getting the node name by its ID ---
 std::string GetNodeName(uint32_t id) {
     switch (id) {
         case HAP_1:   return "HAP_1";
@@ -79,7 +77,7 @@ std::string GetNodeName(uint32_t id) {
     }
 }
 
-// --- Функция для заполнения карты соответствия MAC-адресов Node ID ---
+// --- Function for filling the MAC address Node ID mapping ---
 void PopulateMacTable(NetDeviceContainer devices) {
     for (uint32_t i = 0; i < devices.GetN(); ++i) {
         Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(devices.Get(i));
@@ -121,45 +119,46 @@ void PhyRxDropCallback(Ptr<NetDevice> device, Ptr<const Packet> packet, WifiPhyR
     }
 }
 
-// --- Замените старый MacRxCallback на этот PhyRxEndCallback ---
 void PhyRxEndCallback(Ptr<NetDevice> device, Ptr<const Packet> packet) {
     WifiMacHeader header;
-    // Пытаемся прочитать заголовок (на Phy уровне он есть)
+    // We try to read the header (it exists at the Phy level)
     if (packet->PeekHeader(header)) {
         Mac48Address destAddr = header.GetAddr1();
         Mac48Address myAddr = Mac48Address::ConvertFrom(device->GetAddress());
 
-        // Считаем пакет, только если он адресован нам (или является широковещательным)
+        // We only count a packet if it is addressed to us (or is a broadcast)
         if (destAddr == myAddr || destAddr.IsBroadcast()) {
             Mac48Address srcAddr = header.GetAddr2();
             
-            // Находим ID узла-отправителя
+            // Find the sender node ID
             auto it = g_macToNodeId.find(srcAddr);
             if (it != g_macToNodeId.end()) {
                 uint32_t srcId = it->second;
                 uint32_t dstId = device->GetNode()->GetId();
-                
-                // Увеличиваем счетчик RX для потока Src -> Dst
+
+                // Increment the RX counter for the Src -> Dst stream
                 g_flowStats[std::make_pair(srcId, dstId)].rxPackets++;
             }
         }
     }
 }
 
-// --- Обновленная функция настройки трассировки ---
 void SetupDeviceTraces(NetDeviceContainer devices) {
     for (uint32_t i = 0; i < devices.GetN(); ++i) {
         Ptr<NetDevice> dev = devices.Get(i);
         Ptr<WifiNetDevice> wifiDev = DynamicCast<WifiNetDevice>(dev);
         if (wifiDev) {
-            // Tx трассировка (остается без изменений)
-            wifiDev->GetPhy()->TraceConnectWithoutContext("PhyTxBegin", MakeBoundCallback(&PhyTxBeginCallback, dev));
+            // Tx trace
+            wifiDev->GetPhy()->TraceConnectWithoutContext("PhyTxBegin",
+                MakeBoundCallback(&PhyTxBeginCallback, dev));
             
-            // Rx трассировка: ИСПОЛЬЗУЕМ PhyRxEnd ВМЕСТО MacRx
-            wifiDev->GetPhy()->TraceConnectWithoutContext("PhyRxEnd", MakeBoundCallback(&PhyRxEndCallback, dev));
+            // Rx trace
+            wifiDev->GetPhy()->TraceConnectWithoutContext("PhyRxEnd",
+                MakeBoundCallback(&PhyRxEndCallback, dev));
             
-            // Drop трассировка (остается без изменений)
-            wifiDev->GetPhy()->TraceConnectWithoutContext("PhyRxDrop", MakeBoundCallback(&PhyRxDropCallback, dev));
+            // Drop trace
+            wifiDev->GetPhy()->TraceConnectWithoutContext("PhyRxDrop",
+                MakeBoundCallback(&PhyRxDropCallback, dev));
         }
     }
 }
@@ -472,7 +471,7 @@ main (int argc, char *argv[])
   mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
   mobility.Install(nodes);
 
-  // --- 8. RESTORED: Calculate and Display Ka-band Satellite Link Parameters ---
+  // --- 8. Calculate and Display Ka-band Satellite Link Parameters ---
   Ptr<MobilityModel> hap1Mobility = nodes.Get(HAP_1)->GetObject<MobilityModel>();
   Ptr<MobilityModel> satMobility = nodes.Get(SATELLITE)->GetObject<MobilityModel>();
   Ptr<MobilityModel> hap2Mobility = nodes.Get(HAP_2)->GetObject<MobilityModel>();
@@ -588,7 +587,7 @@ main (int argc, char *argv[])
   Simulator::Stop(Seconds(simTime));
   Simulator::Run();
 
-  // --- 12. RESTORED: Link Level Statistics Output (Flow Based) ---
+  // --- 12. Link Level Statistics Output (Flow Based) ---
   std::cout << "\n\n=== Per-Flow Link Loss Statistics (Node-to-Node) ===" << std::endl;
   std::cout << std::left << std::setw(30) << "Flow (Source -> Dest)" 
             << std::right << std::setw(10) << "Tx Pkts" 
@@ -623,7 +622,7 @@ main (int argc, char *argv[])
   }
   std::cout << std::string(70, '-') << std::endl;
 
-  // --- 13. RESTORED: End-to-End Flow Monitor Stats ---
+  // --- 13. End-to-End Flow Monitor Stats ---
   monitor->CheckForLostPackets();
   Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
   std::map<FlowId, FlowMonitor::FlowStats> stats = monitor->GetFlowStats();
@@ -633,7 +632,7 @@ main (int argc, char *argv[])
    << "km) <-> GEO Sat <-> HAP ("
    << hight/1000 << "km) <-> Ground WiFi" << std::endl;
 
-  // Заголовок таблицы 
+  // Header of table 
   std::cout << "\n" << std::left << std::setw(5)  << "Flow"
             << std::left << std::setw(28) << "Src (IP [Node])"
             << std::left << std::setw(28) << "Dst (IP [Node])"
