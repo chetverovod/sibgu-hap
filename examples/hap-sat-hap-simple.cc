@@ -213,10 +213,10 @@ main (int argc, char *argv[])
   bool verbose = false;
   
   double hight{20000.0};    // meters
-  double Pdbm{20.};       // WiFi TX Power (dBm)
+  double Pdbm{26.};       // WiFi TX Power (dBm)
   
   // Antenna Gains
-  double antGain{20.};    // WiFi Antenna gain
+  double antGain{32.};    // WiFi Antenna gain
   double satAntGain{50.}; // Satellite antenna Gain
   double hapSatAntGain{45.}; // HAP antenna Gain for Sat link
 
@@ -255,6 +255,28 @@ main (int argc, char *argv[])
   nodes.Create (7);
 
   // --- 2. Ground WiFi Configuration ---
+
+  // --- Calculate Atmospheric Loss for HAP-Ground (WiFi) Links ---
+  // The signal travels from HAP (20 km) to Earth (0 km). 
+  // It passes through the entire thickness of the atmosphere and rain.
+  double denseAtmosphereThickness = 20000.0; // Thickness of the dense atmosphere
+  
+  // 1. Rain loss (from ground to cloud top)
+  double rainPathLengthGround = std::min(hight, rainCloudHeight) / 1000.0; 
+  double rainLossGround = rainAttenuation * rainPathLengthGround;
+  
+  // 2. Gas losses (from the ground to the HAP, but limited by the dense atmosphere)
+  double gasPathLengthGround = std::min(hight, denseAtmosphereThickness) / 1000.0;
+  double oxygenLossGround = oxygenAbsorption * gasPathLengthGround;
+  double vaporLossGround = waterVaporAbsorption * gasPathLengthGround;
+  
+  double totalAtmosphericLossGround = rainLossGround + oxygenLossGround + vaporLossGround;
+  
+  NS_LOG_UNCOND("\n=== WiFi Ground Link Parameters ===");
+  NS_LOG_UNCOND("WiFi TX Pwr: " << Pdbm << " dBm");  
+  NS_LOG_UNCOND("TX/RX ant gain: " << antGain << " dBi");  
+  NS_LOG_UNCOND("Atmospheric Path Loss Calculations for HAP 1, HAP 2 to Ground WiFi: " << totalAtmosphericLossGround << " dB");  
+
   WifiHelper wifiA;
   wifiA.SetStandard(WIFI_STANDARD_80211b);
   YansWifiPhyHelper wifiPhyA;
@@ -264,10 +286,16 @@ main (int argc, char *argv[])
   wifiPhyA.Set("TxPowerEnd", DoubleValue(Pdbm));
   YansWifiChannelHelper wifiChannelA;
   wifiChannelA.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-  wifiChannelA.AddPropagationLoss("ns3::LogDistancePropagationLossModel", "Exponent", DoubleValue(2.0), "ReferenceDistance", DoubleValue(1.0), "ReferenceLoss", DoubleValue(40.0));
+  wifiChannelA.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+                       "Exponent", DoubleValue(2.0),
+                       "ReferenceDistance", DoubleValue(1.0),
+                       "ReferenceLoss", DoubleValue(40.0 + totalAtmosphericLossGround));
   wifiPhyA.SetChannel(wifiChannelA.Create());
+
   WifiMacHelper wifiMacA;
-  wifiA.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(phyModeA), "ControlMode", StringValue(phyModeA));
+  wifiA.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                                "DataMode", StringValue(phyModeA),
+                                "ControlMode", StringValue(phyModeA));
   wifiMacA.SetType("ns3::AdhocWifiMac");
 
   WifiHelper wifiB;
@@ -279,10 +307,15 @@ main (int argc, char *argv[])
   wifiPhyB.Set("TxPowerEnd", DoubleValue(Pdbm));
   YansWifiChannelHelper wifiChannelB;
   wifiChannelB.SetPropagationDelay("ns3::ConstantSpeedPropagationDelayModel");
-  wifiChannelB.AddPropagationLoss("ns3::LogDistancePropagationLossModel", "Exponent", DoubleValue(2.0), "ReferenceDistance", DoubleValue(1.0), "ReferenceLoss", DoubleValue(46.7));
+  wifiChannelB.AddPropagationLoss("ns3::LogDistancePropagationLossModel",
+                                  "Exponent", DoubleValue(2.0),
+                                  "ReferenceDistance", DoubleValue(1.0),
+                                  "ReferenceLoss", DoubleValue(46.7 + totalAtmosphericLossGround));
   wifiPhyB.SetChannel(wifiChannelB.Create());
   WifiMacHelper wifiMacB;
-  wifiB.SetRemoteStationManager("ns3::ConstantRateWifiManager", "DataMode", StringValue(phyModeB), "ControlMode", StringValue(phyModeB));
+  wifiB.SetRemoteStationManager("ns3::ConstantRateWifiManager",
+                                "DataMode", StringValue(phyModeB),
+                                "ControlMode", StringValue(phyModeB));
   wifiMacB.SetType("ns3::AdhocWifiMac");
 
   // --- 3. Configure Ka-band Satellite Links (SEPARATED CHANNELS) ---
@@ -500,7 +533,6 @@ main (int argc, char *argv[])
   if (hight < rainCloudHeight) {
       rainLoss = rainAttenuation * (rainCloudHeight - hight) / 1000.0;
   }
-  double denseAtmosphereThickness = 20000.0; 
   double gasPathLength = 0.0;
   if (hight < denseAtmosphereThickness) {
       gasPathLength = (denseAtmosphereThickness - hight) / 1000.0; 
