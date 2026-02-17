@@ -74,7 +74,7 @@ main(int argc, char* argv[])
     // Disable default packet traces to keep console clean
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(false));
 
-    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("sat-hap-socket-test");
+    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("hap-sat-hap");
 
     // --- 2. Scenario Configuration ---
     
