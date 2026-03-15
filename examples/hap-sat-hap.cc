@@ -98,22 +98,9 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize,
     }
 }
 
-int main(int argc, char* argv[])
+
+int MakeLinkToScenario(std::string myScenarioName)
 {
-    uint32_t packetSize = 1500;
-    uint32_t numPackets = 1000;
-    std::string intervalStr("265ms");
-    double simLength = 10.; //300.0;
-    double hapHeight = 20000.0;
-
-    CommandLine cmd;
-    cmd.AddValue("packetSize", "Size of packet (bytes)", packetSize);
-    cmd.AddValue("numPackets", "Number of packets", numPackets);
-    cmd.AddValue("interval", "Interval between packets", intervalStr);
-    cmd.Parse(argc, argv);
-
-    Time interPacketInterval = Time(intervalStr);
-
 // === ИСПРАВЛЕНИЕ ПУТЕЙ (Абсолютные пути) ===
     
     // 1. Получаем корневую директорию проекта 
@@ -130,7 +117,6 @@ int main(int argc, char* argv[])
 
     // 2. Формируем АБСОЛЮТНЫЙ путь к НАШЕЙ папке со сценой (источник)
     // Путь: [ROOT]/contrib/sibgu-hap/data/scenarios/geo-33E-hap
-    std::string myScenarioName = "geo-33E-hap";
     std::string sourceScenarioPath = SystemPath::Append(ns3Root, 
         "contrib/sibgu-hap/data/scenarios/" + myScenarioName);
 
@@ -173,6 +159,27 @@ int main(int argc, char* argv[])
         return 1;
     }
     std::cout << "Symlink created successfully!" << std::endl;
+    return 0;
+}
+
+int main(int argc, char* argv[])
+{
+    uint32_t packetSize = 1500;
+    uint32_t numPackets = 1000;
+    std::string intervalStr("265ms");
+    double simLength = 10.; //300.0;
+    double hapHeight = 20000.0;
+
+    CommandLine cmd;
+    cmd.AddValue("packetSize", "Size of packet (bytes)", packetSize);
+    cmd.AddValue("numPackets", "Number of packets", numPackets);
+    cmd.AddValue("interval", "Interval between packets", intervalStr);
+    cmd.Parse(argc, argv);
+
+    Time interPacketInterval = Time(intervalStr);
+
+    std::string myScenarioName = "geo-33E-hap";
+    if (MakeLinkToScenario(myScenarioName)) return 1;
 
     // === SATELLITE SETUP ===
     
