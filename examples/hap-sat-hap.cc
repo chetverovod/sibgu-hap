@@ -30,16 +30,20 @@ std::map<uint64_t, uint32_t> g_packetLastSender;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_hopStats;
 
 std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
-     NodeContainer userNodes, NodeContainer satNodes)
+     NodeContainer userNodes, NodeContainer satNodes, NodeContainer utNodes)
 {
     for (uint32_t i = 0; i < satNodes.GetN(); ++i) {
         if (id == satNodes.Get(i)->GetId()) return "SAT_" + std::to_string(i+1);
     }
+    // Добавим проверку для UT (спутниковые пользователи)
+    for (uint32_t i = 0; i < utNodes.GetN(); ++i) {
+        if (id == utNodes.Get(i)->GetId()) return "UT_" + std::to_string(i+1);
+    }
     for (uint32_t i = 0; i < gwNodes.GetN(); ++i) {
-        if (id == gwNodes.Get(i)->GetId()) return "HAP_" + std::to_string(i+1);
+        if (id == gwNodes.Get(i)->GetId()) return "GW_" + std::to_string(i+1);
     }
     for (uint32_t i = 0; i < userNodes.GetN(); ++i) {
-        if (id == userNodes.Get(i)->GetId()) return "USER_" + std::to_string(i+1);
+        if (id == userNodes.Get(i)->GetId()) return "GW_USER_" + std::to_string(i+1);
     }
     return "Node_" + std::to_string(id);
 }
@@ -130,7 +134,7 @@ int MakeLinkToScenario(std::string myScenarioName)
     std::cout << "Custom scenario found: " << sourceScenarioPath << std::endl;
 
     // 3. Формируем АБСОЛЮТНЫЙ путь к папке, куда СМОТРИТ модуль (целевая папка)
-    // В которуюу поместим ссылку на папку с нашей сценjq.
+    // В которую поместим ссылку на папку с нашей сценой.
     // Путь: [ROOT]/contrib/satellite/data/scenarios
     std::string systemScenarioDir = SystemPath::Append(ns3Root, 
         "contrib/satellite/data/scenarios");
@@ -168,7 +172,7 @@ int main(int argc, char* argv[])
     uint32_t numPackets = 1000;
     std::string intervalStr("265ms");
     double simLength = 10.; //300.0;
-    double hapHeight = 20000.0;
+   // double hapHeight = 20000.0;
 
     CommandLine cmd;
     cmd.AddValue("packetSize", "Size of packet (bytes)", packetSize);
@@ -199,20 +203,10 @@ int main(int argc, char* argv[])
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
 
     // === MOBILITY ===
-    NodeContainer gwNodes = topology->GetGwNodes();
-    NodeContainer gwUserNodes = topology->GetGwUserNodes();
+    
+    //NodeContainer gwNodes = topology->GetGwNodes();
+    //NodeContainer gwUserNodes = topology->GetGwUserNodes();
     NodeContainer satNodes;
-
-    NS_LOG_UNCOND("--- Positioning Nodes ---");
-    MobilityHelper mobility;
-    Ptr<ListPositionAllocator> positionAlloc = CreateObject<ListPositionAllocator>();
-    positionAlloc->Add(Vector(0.0, 0.0, hapHeight));
-    positionAlloc->Add(Vector(1.0, 0.0, hapHeight));
-    positionAlloc->Add(Vector(0.0, 0.05, 0.0));
-    positionAlloc->Add(Vector(1.0, 0.05, 0.0));
-    mobility.SetPositionAllocator(positionAlloc);
-    mobility.Install(gwNodes);
-    mobility.Install(gwUserNodes);
 
 
     // === TRACING ===
@@ -220,6 +214,52 @@ int main(int argc, char* argv[])
     Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Rx", MakeCallback(&Ipv4RxTrace));
 
     // === TRAFFIC ===
+// === TRAFFIC ===
+    
+    // Сначала пробуем использовать UT (User Terminals) - это настоящие спутниковые абоненты.
+    // Связь между UT всегда идет через спутник.
+    NodeContainer utNodes = topology->GetUtNodes();
+    NodeContainer gwNodes = topology->GetGwNodes();
+    NodeContainer gwUserNodes = topology->GetGwUserNodes();
+    
+    Ptr<Node> sourceNode;
+    Ptr<Node> sinkNode;
+
+    if (utNodes.GetN() >= 2) {
+        std::cout << "Using UT nodes for traffic (Satellite Link)." << std::endl;
+        // Берем первого и последнего UT, чтобы гарантировать, что они обслуживаются разными лучами или шлюзами
+        sourceNode = utNodes.Get(0);
+        sinkNode = utNodes.Get(utNodes.GetN() - 1);
+    } 
+    else {
+        // Если UT нет (странно для спутниковой симуляции), используем пользователей шлюза,
+        // но warn: они могут быть в одной сети.
+        std::cout << "WARNING: Not enough UT nodes found (" 
+        << utNodes.GetN() << "). Using GW User nodes (might result in 0ms delay)." << std::endl;
+        
+        if (gwUserNodes.GetN() < 2) {
+            std::cerr << "FATAL: Not enough nodes!" << std::endl;
+            Simulator::Destroy();
+            return 1;
+        }
+        sourceNode = gwUserNodes.Get(0);
+        sinkNode = gwUserNodes.Get(gwUserNodes.GetN() - 1);
+    }
+
+    // Вывод IP для отладки
+    Ipv4Address sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(1, 0).GetLocal();
+    std::cout << "Source Node ID: " << sourceNode->GetId() 
+              << ", Sink Node ID: " << sinkNode->GetId() 
+              << ", Sink IP: " << sinkAddr << std::endl;
+
+    uint16_t port = 9;
+    TypeId tid = TypeId::LookupByName("ns3::UdpSocketFactory");
+    Ptr<Socket> recvSink = Socket::CreateSocket(sinkNode, tid);
+    recvSink->Bind(InetSocketAddress(Ipv4Address::GetAny(), port));
+    recvSink->SetRecvCallback(MakeCallback(&ReceivePacket));
+    Ptr<Socket> source = Socket::CreateSocket(sourceNode, tid);
+    source->Connect(InetSocketAddress(sinkAddr, port));
+    /*
     Ptr<Node> sourceNode = gwUserNodes.Get(0);
     Ptr<Node> sinkNode = gwUserNodes.Get(1);
     
@@ -241,7 +281,13 @@ int main(int argc, char* argv[])
         // Используем UT ноды как источник и приемник
         std::cout << "Using UT nodes for traffic." << std::endl;
         sourceNode = utNodes.Get(0);
-        sinkNode = utNodes.Get(1);
+
+          // Берем последнего пользователя в списке. 
+    // В стандартной конфигурации ns3-satellite пользователи распределяются по шлюзам последовательно.
+    // Первый пользователь - на 1-м шлюзе. Последний - на последнем шлюзе.
+    // Это гарантирует, что трафик полетит через спутник.
+        sinkNode = gwUserNodes.Get(gwUserNodes.GetN() - 1);
+        //sinkNode = utNodes.Get(1);
     } else {
         // Если gwUserNodes есть, используем их
         std::cout << "Using GW User nodes for traffic." << std::endl;
@@ -258,6 +304,7 @@ int main(int argc, char* argv[])
     recvSink->SetRecvCallback(MakeCallback(&ReceivePacket));
     Ptr<Socket> source = Socket::CreateSocket(sourceNode, tid);
     source->Connect(InetSocketAddress(sinkAddr, port));
+*/
 
     // === FLOW MONITOR ===
     FlowMonitorHelper flowmon;
@@ -281,14 +328,12 @@ int main(int argc, char* argv[])
     NodeContainer nodesToPrint;
     nodesToPrint.Add(gwNodes);
     nodesToPrint.Add(gwUserNodes);
-    // Если хотите видеть спутник в списке, раскомментируйте следующую строку:
-    // nodesToPrint.Add(satNodes);
 
     // Чтобы напечатать все узлы раскомиентировать это.
     //nodesToPrint = NodeContainer::GetGlobal();
     for (uint32_t i = 0; i < nodesToPrint.GetN(); ++i) {
         Ptr<Node> node = nodesToPrint.Get(i);
-        std::string name = GetNodeName(node->GetId(), gwNodes, gwUserNodes, satNodes);
+        std::string name = GetNodeName(node->GetId(), gwNodes, gwUserNodes, satNodes, utNodes);
         Ptr<Ipv4> ipv4 = node->GetObject<Ipv4>();
         if (ipv4) {
             uint32_t nIf = ipv4->GetNInterfaces();
@@ -313,8 +358,8 @@ int main(int argc, char* argv[])
 
     for (auto const& key : sortedHops) {
         uint32_t count = g_hopStats[key];
-        std::string srcName = GetNodeName(key.first, gwNodes, gwUserNodes, satNodes);
-        std::string dstName = GetNodeName(key.second, gwNodes, gwUserNodes, satNodes);
+        std::string srcName = GetNodeName(key.first, gwNodes, gwUserNodes, satNodes, utNodes);
+        std::string dstName = GetNodeName(key.second, gwNodes, gwUserNodes, satNodes, utNodes);
         std::cout << std::left << std::setw(30) << (srcName + " -> " + dstName)
                   << std::right << std::setw(15) << count << std::endl;
     }
