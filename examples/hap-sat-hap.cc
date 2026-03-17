@@ -65,7 +65,7 @@ std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
                     return "SAT_CHAN_" + std::to_string(id);
                 }
                 
-                // Если это упрощенная модель спутника (содержит "SatSimple") - ВАЖНО ДЛЯ ВАШЕГО СЛУЧАЯ
+                // Если это упрощенная модель спутника (содержит "SatSimple")
                 if (channelName.find("SatSimple") != std::string::npos)
                 {
                     return "SAT_CHAN_" + std::to_string(id);
