@@ -202,8 +202,7 @@ int main(int argc, char* argv[])
     uint32_t numPackets = 1000;
     std::string intervalStr("265ms");
     double simLength = 10.; //300.0;
-   // double hapHeight = 20000.0;
-
+   
     CommandLine cmd;
     cmd.AddValue("packetSize", "Size of packet (bytes)", packetSize);
     cmd.AddValue("numPackets", "Number of packets", numPackets);
@@ -233,6 +232,7 @@ int main(int argc, char* argv[])
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
 
     // === MOBILITY ===
+    // In current simulations all positions are static.
 
     // === TRACING ===
     Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Tx", MakeCallback(&Ipv4TxTrace));
@@ -245,13 +245,12 @@ int main(int argc, char* argv[])
     NodeContainer gwUserNodes = topology->GetGwUserNodes();
     NodeContainer satNodes = topology->GetOrbiterNodes(); 
     
-// --- DEBUG: Check which nodes are considered satellites ---
-    std::cout << "DEBUG: Found " << satNodes.GetN() << " Orbiters (Satellites)." << std::endl;
+    //  Check which nodes are considered satellites ---
+    std::cout << "Found " << satNodes.GetN() << " Orbiters (Satellites)." << std::endl;
     for (uint32_t i = 0; i < satNodes.GetN(); ++i) {
         std::cout << "  Orbiter ID: " << satNodes.Get(i)->GetId() << std::endl;
     }
     // -------------------------------------------------------    
-
 
 
     Ptr<Node> sourceNode;
