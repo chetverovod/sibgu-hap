@@ -32,7 +32,7 @@ std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_hopStats;
 std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
      NodeContainer userNodes, NodeContainer satNodes, NodeContainer utNodes)
 {
-    // 1. Стандартные проверки по спискам
+    // 1. Standard checks against lists
     for (uint32_t i = 0; i < satNodes.GetN(); ++i) {
         if (id == satNodes.Get(i)->GetId()) return "SAT_" + std::to_string(i+1);
     }
@@ -46,7 +46,7 @@ std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
         if (id == userNodes.Get(i)->GetId()) return "GW_USER_" + std::to_string(i+1);
     }
 
-    // 2. Интеллектуальная проверка узла
+    // 2. Intelligent node check
     Ptr<Node> node = NodeList::GetNode(id);
     if (node != nullptr)
     {
@@ -56,16 +56,16 @@ std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
             Ptr<Channel> ch = dev->GetChannel();
             if (ch)
             {
-                // --- ПРОВЕРКА ПО ИМЕНИ КАНАЛА ---
+                // --- CHECK BY CHANNEL NAME ---
                 std::string channelName = ch->GetInstanceTypeId().GetName();
                 
-                // Если это стандартный спутник (содержит "Satellite")
+                // If this is a standard satellite (contains "Satellite")
                 if (channelName.find("Satellite") != std::string::npos)
                 {
                     return "SAT_CHAN_" + std::to_string(id);
                 }
                 
-                // Если это упрощенная модель спутника (содержит "SatSimple")
+                // If this is a simplified satellite model (contains "SatSimple")
                 if (channelName.find("SatSimple") != std::string::npos)
                 {
                     return "SAT_CHAN_" + std::to_string(id);
@@ -135,10 +135,10 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize,
 
 int MakeLinkToScenario(std::string myScenarioName)
 {
-// === ИСПРАВЛЕНИЕ ПУТЕЙ (Абсолютные пути) ===
+// === PATH FIXING (Absolute paths) ===
     
-    // 1. Получаем корневую директорию проекта 
-    // (она же Current Working Directory при запуске через ./ns3)
+    // 1. Get the project root directory 
+    // (which is also the Current Working Directory when running via ./ns3)
     char buffer[1024];
     std::string ns3Root;
     if (getcwd(buffer, sizeof(buffer)) != nullptr) {
@@ -149,12 +149,12 @@ int MakeLinkToScenario(std::string myScenarioName)
     }
     std::cout << "NS-3 Root detected: " << ns3Root << std::endl;
 
-    // 2. Формируем АБСОЛЮТНЫЙ путь к НАШЕЙ папке со сценой (источник)
-    // Путь: [ROOT]/contrib/sibgu-hap/data/scenarios/geo-33E-hap
+    // 2. Form the ABSOLUTE path to OUR scenario folder (source)
+    // Path: [ROOT]/contrib/sibgu-hap/data/scenarios/geo-33E-hap
     std::string sourceScenarioPath = SystemPath::Append(ns3Root, 
         "contrib/sibgu-hap/data/scenarios/" + myScenarioName);
 
-    // Проверяем, существует ли эта папка
+    // Check if this folder exists
     struct stat info;
     if (stat(sourceScenarioPath.c_str(), &info) != 0) {
         std::cerr << "ERROR: Your custom scenario not found at: " 
@@ -163,13 +163,13 @@ int MakeLinkToScenario(std::string myScenarioName)
     }
     std::cout << "Custom scenario found: " << sourceScenarioPath << std::endl;
 
-    // 3. Формируем АБСОЛЮТНЫЙ путь к папке, куда СМОТРИТ модуль (целевая папка)
-    // В которую поместим ссылку на папку с нашей сценой.
-    // Путь: [ROOT]/contrib/satellite/data/scenarios
+    // 3. Form the ABSOLUTE path to the folder the module LOOKS AT (target folder)
+    // Where we will place a link to our scenario folder.
+    // Path: [ROOT]/contrib/satellite/data/scenarios
     std::string systemScenarioDir = SystemPath::Append(ns3Root, 
         "contrib/satellite/data/scenarios");
 
-    // Проверяем, существует ли стандартная папка (должна быть в любой нормальной установке)
+    // Check if the standard folder exists (should be in any normal installation)
     if (stat(systemScenarioDir.c_str(), &info) != 0) {
         std::cerr << "ERROR: Standard satellite scenario folder not found at: " 
         << systemScenarioDir << std::endl;
@@ -178,14 +178,14 @@ int MakeLinkToScenario(std::string myScenarioName)
     }
     std::cout << "System scenario folder found: " << systemScenarioDir << std::endl;
 
-    // 4. Формируем полный путь к будущей ссылке
+    // 4. Form the full path to the future link
     std::string linkPath = SystemPath::Append(systemScenarioDir, myScenarioName);
 
-    // 5. Удаляем старую ссылку, если она осталась с прошлого запуска
+    // 5. Remove the old link if it remains from the previous run
     unlink(linkPath.c_str());
 
-    // 6. Создаем символическую ссылку
-    // Создаем файл-ссылку внутри стандартной папки, указывающий на нашу папку со сценой
+    // 6. Create a symbolic link
+    // Create a link file inside the standard folder pointing to our scenario folder
     std::cout << "Creating symlink: " << linkPath << " -> " << sourceScenarioPath << std::endl;
     if (symlink(sourceScenarioPath.c_str(), linkPath.c_str()) != 0) {
         std::cerr << "FATAL: Failed to create symlink." << std::endl;
@@ -225,7 +225,7 @@ int main(int argc, char* argv[])
     Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("hap-sat-hap");
     simulationHelper->SetSimulationTime(simLength);
 
-    // 7. Загружаем сценарий
+    // 7. Load the scenario
     simulationHelper->LoadScenario(myScenarioName);
     
     simulationHelper->CreateSatScenario(SatHelper::FULL);   
@@ -245,7 +245,7 @@ int main(int argc, char* argv[])
     NodeContainer gwUserNodes = topology->GetGwUserNodes();
     NodeContainer satNodes = topology->GetOrbiterNodes(); 
     
-// --- ОТЛАДКА: Проверим, какие узлы считаются спутниками ---
+// --- DEBUG: Check which nodes are considered satellites ---
     std::cout << "DEBUG: Found " << satNodes.GetN() << " Orbiters (Satellites)." << std::endl;
     for (uint32_t i = 0; i < satNodes.GetN(); ++i) {
         std::cout << "  Orbiter ID: " << satNodes.Get(i)->GetId() << std::endl;
@@ -258,7 +258,7 @@ int main(int argc, char* argv[])
     Ptr<Node> sinkNode;
 
     if (utNodes.GetN() < 2) {
-        // Fallback если UT нет
+        // Fallback if there are no UTs
         std::cout << "WARNING: Not enough UT nodes. Using GW User nodes." << std::endl;
         sourceNode = gwUserNodes.Get(0);
         sinkNode = gwUserNodes.Get(gwUserNodes.GetN() - 1);
@@ -267,7 +267,7 @@ int main(int argc, char* argv[])
     {
         std::cout << "Analyzing UT to GW mapping..." << std::endl;
         
-        // 1. Создаем мап: IP адрес шлюза -> Сам узел шлюза
+        // 1. Create a map: Gateway IP address -> The Gateway node itself
         std::map<Ipv4Address, Ptr<Node>> gwIpToNodeMap;
         
         for (uint32_t i = 0; i < gwNodes.GetN (); ++i)
@@ -276,7 +276,7 @@ int main(int argc, char* argv[])
             Ptr<Ipv4> ipv4 = gw->GetObject<Ipv4> ();
             for (uint32_t j = 1; j < ipv4->GetNInterfaces (); ++j)
             {
-                // Собираем все IP адреса всех интерфейсов шлюза
+                // Collect all IP addresses of all gateway interfaces
                 Ipv4Address addr = ipv4->GetAddress (j, 0).GetLocal ();
                 if (addr != Ipv4Address ()) {
                     gwIpToNodeMap[addr] = gw;
@@ -284,7 +284,7 @@ int main(int argc, char* argv[])
             }
         }
 
-        // 2. Группируем UT по шлюзам, к которым они подключены (через Default Route)
+        // 2. Group UTs by the gateways they are connected to (via Default Route)
         std::map<Ptr<Node>, std::vector<Ptr<Node>>> gwToUtsMap;
         Ipv4StaticRoutingHelper routingHelper;
 
@@ -293,7 +293,7 @@ int main(int argc, char* argv[])
             Ptr<Node> ut = utNodes.Get (i);
             Ptr<Ipv4> ipv4 = ut->GetObject<Ipv4> ();
             
-            // Получаем таблицу статической маршрутизации для UT
+            // Get the static routing table for the UT
             Ptr<Ipv4StaticRouting> staticRouting = routingHelper.GetStaticRouting (ipv4);
             
             if (staticRouting)
@@ -303,7 +303,7 @@ int main(int argc, char* argv[])
                 {
                     Ipv4RoutingTableEntry route = staticRouting->GetRoute (j);
                     
-                    // Используем GetZero() для получения 0.0.0.0
+                    // Use GetZero() to get 0.0.0.0
                     if (route.GetDest () == Ipv4Address::GetZero () && 
                         route.GetDestNetworkMask () == Ipv4Mask::GetZero ())
                     {
@@ -319,13 +319,13 @@ int main(int argc, char* argv[])
             }
         }
 
-        // 3. Выбираем источника и приемника из РАЗНЫХ групп
+        // 3. Select source and sink from DIFFERENT groups
         if (gwToUtsMap.size () >= 2)
         {
             auto it = gwToUtsMap.begin ();
-            std::vector<Ptr<Node>> group1 = it->second; // Группа 1-го шлюза
+            std::vector<Ptr<Node>> group1 = it->second; // Group of the 1st gateway
             it++;
-            std::vector<Ptr<Node>> group2 = it->second; // Группа 2-го шлюза
+            std::vector<Ptr<Node>> group2 = it->second; // Group of the 2nd gateway
 
             sourceNode = group1[0];
             sinkNode = group2[0]; 
@@ -344,7 +344,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Вывод IP для отладки
+    // Output IP for debugging
     Ipv4Address sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(1, 0).GetLocal();
 
     std::cout << "Source Node ID: " << sourceNode->GetId() 
@@ -377,12 +377,12 @@ int main(int argc, char* argv[])
               << std::left << std::setw(18) << "IP Address" << std::endl;
     std::cout << std::string(43, '-') << std::endl;
 
-    // Берем только нужные нам узлы, игнорируя сотни лишних из файла сценария
+    // Take only the nodes we need, ignoring hundreds of extras from the scenario file
     NodeContainer nodesToPrint;
     nodesToPrint.Add(gwNodes);
     nodesToPrint.Add(gwUserNodes);
 
-    // Чтобы напечатать все узлы раскомиентировать это.
+    // To print all nodes, uncomment this.
     //nodesToPrint = NodeContainer::GetGlobal();
     for (uint32_t i = 0; i < nodesToPrint.GetN(); ++i) {
         Ptr<Node> node = nodesToPrint.Get(i);
