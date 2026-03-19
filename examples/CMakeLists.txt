@@ -55,6 +55,18 @@ build_lib_example(
 )
 
 build_lib_example(
+    NAME hap-constellation-hap
+    SOURCE_FILES hap-constellation-hap.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libsatellite}  
+                       ${libflow-monitor}
+                       ${libnetanim}
+)
+
+
+build_lib_example(
     NAME hap-sat-hap_2
     SOURCE_FILES hap-sat-hap_2.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
