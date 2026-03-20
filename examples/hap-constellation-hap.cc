@@ -184,9 +184,21 @@ int main(int argc, char* argv[])
     // Load the constellation scenario
     // Note: We assume this scenario exists in the standard satellite module data folder
     simulationHelper->LoadScenario(scenarioFolder);
+
+    //<<
+     // Load the constellation scenario
+    simulationHelper->LoadScenario(scenarioFolder);
     
+    // === ИСПРАВЛЕНИЕ ===
+    // Используем метод SetUserCountPerUt.
+    // В данной версии API он принимает число (uint32_t), а не вектор.
+    // Это установит 1 пользователя для каждого UT в сценарии.
+    simulationHelper->SetUserCountPerUt (1); 
+    // =====================
+
     // Create the full scenario
     simulationHelper->CreateSatScenario(SatHelper::FULL);   
+    //<<
 
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
 
