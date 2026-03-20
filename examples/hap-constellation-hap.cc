@@ -144,10 +144,9 @@ int main(int argc, char* argv[])
 
     Time interPacketInterval = Time(intervalStr);
 
-    // === CONFIGURATION FROM sat-constellation-example ===
+    // === CONFIGURATION ===
     
-    // Enable packet trace if needed, though hap-sat-hap disabled it. 
-    // We stick to hap-sat-hap preference for flow monitor.
+    // Enable packet trace if needed
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(false));
 
     // Set regeneration mode (Required for constellation ISL routing)
@@ -179,22 +178,13 @@ int main(int argc, char* argv[])
     Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("hap-sat-constellation");
     simulationHelper->SetSimulationTime(simLength);
     
-
-    
     // Load the constellation scenario
     // Note: We assume this scenario exists in the standard satellite module data folder
     simulationHelper->LoadScenario(scenarioFolder);
-
-    //<<
-     // Load the constellation scenario
-    simulationHelper->LoadScenario(scenarioFolder);
     
-    // === ИСПРАВЛЕНИЕ ===
     // Используем метод SetUserCountPerUt.
-    // В данной версии API он принимает число (uint32_t), а не вектор.
     // Это установит 1 пользователя для каждого UT в сценарии.
     simulationHelper->SetUserCountPerUt (1); 
-    // =====================
 
     // Create the full scenario
     simulationHelper->CreateSatScenario(SatHelper::FULL);   
@@ -202,12 +192,11 @@ int main(int argc, char* argv[])
 
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
 
-    // === TRACING (From hap-sat-hap) ===
+    // === TRACING ===
     Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Tx", MakeCallback(&Ipv4TxTrace));
     Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Rx", MakeCallback(&Ipv4RxTrace));
     
-    // === TRAFFIC SETUP (From hap-sat-hap) ===
-    
+    // === TRAFFIC SETUP ===
     NodeContainer utNodes = topology->GetUtNodes();
     NodeContainer gwNodes = topology->GetGwNodes();
     NodeContainer gwUserNodes = topology->GetGwUserNodes();
@@ -438,7 +427,7 @@ int main(int argc, char* argv[])
     }
     std::cout << std::string(95, '-') << std::endl;
 
-    monitor->SerializeToXmlFile("hap-sat-constellation-stats.xml", true, true);
+    monitor->SerializeToXmlFile("hap-constellation-hap-stats.xml", true, true);
     std::cout << "\n=== End of Simulation ===" << std::endl;
 
     Simulator::Destroy();
