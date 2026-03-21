@@ -1,10 +1,12 @@
 /*
- * File: hap-sat-constellation.cc
- * Scenario: HAPs/UTs communicating via a Satellite Constellation (instead of a single GEO).
+ * File: hap-constellation-hap.cc
+ * Scenario: Handover in a LEO Constellation.
  * 
- * This test merges the configuration logic:
- * 1. Traffic & Monitoring: Derived from hap-sat-hap.cc (Sockets, FlowMonitor, custom traces).
- * 2. Topology: Derived from sat-constellation-example.cc (Regeneration, ISL, specific scenario).
+ * CHANGE LOG:
+ * 1. Switched scenario to "constellation-iridium" (LEO) to allow satellites to move out of visibility.
+ * 2. Increased simulation time to 300 seconds to ensure satellites pass overhead.
+ * 3. Simplified node selection (Source=UT0, Sink=GW0) to observe natural handover.
+ * 4. Removed "MakeLinkToScenario" as we use a standard built-in scenario.
  */
 
 #include "ns3/core-module.h"
@@ -25,7 +27,7 @@
 
 using namespace ns3;
 
-NS_LOG_COMPONENT_DEFINE("HapSatConstellation");
+NS_LOG_COMPONENT_DEFINE("HapSatConstellationHandover");
 
 std::map<uint64_t, uint32_t> g_packetLastSender;
 std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_hopStats;
@@ -47,31 +49,8 @@ std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
         if (id == userNodes.Get(i)->GetId()) return "GW_USER_" + std::to_string(i+1);
     }
 
-    // 2. Intelligent node check based on channel
-    Ptr<Node> node = NodeList::GetNode(id);
-    if (node != nullptr)
-    {
-        for (uint32_t i = 0; i < node->GetNDevices(); ++i)
-        {
-            Ptr<NetDevice> dev = node->GetDevice(i);
-            Ptr<Channel> ch = dev->GetChannel();
-            if (ch)
-            {
-                std::string channelName = ch->GetInstanceTypeId().GetName();
-                
-                // Check for standard satellite or simplified satellite model
-                if (channelName.find("Satellite") != std::string::npos ||
-                    channelName.find("SatSimple") != std::string::npos)
-                {
-                    return "SAT_CHAN_" + std::to_string(id);
-                }
-            }
-        }
-    }
-
     return "Node_" + std::to_string(id);
 }
-
 
 uint32_t GetNodeIdFromContext(std::string context)
 {
@@ -130,10 +109,11 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize,
 int main(int argc, char* argv[])
 {
     uint32_t packetSize = 1500;
-    uint32_t numPackets = 1000;
-    std::string intervalStr("265ms");
-    double simLength = 30.0; 
-    std::string scenarioFolder = "constellation-eutelsat-geo-2-sats-isls";
+    uint32_t numPackets = 10000; // Increased to cover the longer simulation
+    std::string intervalStr("50ms");
+    double simLength = 300.0; // 5 minutes to allow satellites to pass
+    // Using Iridium (LEO) constellation. Satellites move fast relative to ground.
+    std::string scenarioFolder = "constellation-iridium-next-66-sats";
    
     CommandLine cmd;
     cmd.AddValue("packetSize", "Size of packet (bytes)", packetSize);
@@ -146,49 +126,40 @@ int main(int argc, char* argv[])
 
     // === CONFIGURATION ===
     
-    // Enable packet trace if needed
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(false));
 
-    // Set regeneration mode (Required for constellation ISL routing)
+    // Regeneration mode for ISLs (Iridium uses ISLs)
     Config::SetDefault("ns3::SatConf::ForwardLinkRegenerationMode",
                        EnumValue(SatEnums::REGENERATION_NETWORK));
     Config::SetDefault("ns3::SatConf::ReturnLinkRegenerationMode",
                        EnumValue(SatEnums::REGENERATION_NETWORK));
     
-    // Configure Queue sizes (from constellation example)
     Config::SetDefault("ns3::SatOrbiterFeederPhy::QueueSize", UintegerValue(100000));
     Config::SetDefault("ns3::SatOrbiterUserPhy::QueueSize", UintegerValue(100000));
 
-    // Configure ISL (Inter-Satellite Link) parameters
     Config::SetDefault("ns3::PointToPointIslHelper::IslDataRate",
                        DataRateValue(DataRate("100Mb/s")));
     
-    // Mobility settings for constellation
     Config::SetDefault("ns3::SatSGP4MobilityModel::UpdatePositionEachRequest", BooleanValue(false));
     Config::SetDefault("ns3::SatSGP4MobilityModel::UpdatePositionPeriod", TimeValue(Seconds(1)));
 
-    // === CONFIGURATION FROM hap-sat-hap (Error Models) ===
-
+    // Use EM_NONE for geometric handover (link breaks when satellite moves out of beam/visibility)
+    // If you want signal-quality based handover, you would need EM_AVM and fading traces.
     SatPhyRxCarrierConf::ErrorModel em(SatPhyRxCarrierConf::EM_NONE);
     Config::SetDefault("ns3::SatUtHelper::FwdLinkErrorModel", EnumValue(em));
     Config::SetDefault("ns3::SatGwHelper::RtnLinkErrorModel", EnumValue(em));
 
     // === SIMULATION SETUP ===
 
-    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("hap-sat-constellation");
+    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("hap-sat-handover");
     simulationHelper->SetSimulationTime(simLength);
-    
-    // Load the constellation scenario
-    // Note: We assume this scenario exists in the standard satellite module data folder
     simulationHelper->LoadScenario(scenarioFolder);
-    
-    // Используем метод SetUserCountPerUt.
-    // Это установит 1 пользователя для каждого UT в сценарии.
     simulationHelper->SetUserCountPerUt (1); 
+    
+    // Note: We do NOT use MakeLinkToScenario here because "constellation-iridium" is a standard
+    // scenario included in the ns-3-satellite module.
 
-    // Create the full scenario
     simulationHelper->CreateSatScenario(SatHelper::FULL);   
-    //<<
 
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
 
@@ -203,102 +174,37 @@ int main(int argc, char* argv[])
     NodeContainer satNodes = topology->GetOrbiterNodes(); 
     
     std::cout << "Found " << satNodes.GetN() << " Satellites in constellation." << std::endl;
+    std::cout << "Found " << utNodes.GetN() << " UTs." << std::endl;
 
     Ptr<Node> sourceNode;
     Ptr<Node> sinkNode;
 
-    // Logic to select source and sink UTs connected to different GWs
-    // to ensure traffic routes through the satellite network.
-    if (utNodes.GetN() < 2) {
-        // Fallback if there are no UTs
-        std::cout << "WARNING: Not enough UT nodes. Using GW User nodes." << std::endl;
-        sourceNode = gwUserNodes.Get(0);
-        sinkNode = gwUserNodes.Get(gwUserNodes.GetN() - 1);
-    } 
-    else 
+    // Simple selection: Use the first UT and the first GW User.
+    // As the simulation runs, the UT will naturally switch satellites as they orbit.
+    if (utNodes.GetN() > 0 && gwUserNodes.GetN() > 0)
     {
-        std::cout << "Analyzing UT to GW mapping..." << std::endl;
+        sourceNode = utNodes.Get(0);
+        sinkNode = gwUserNodes.Get(0); // Or another UT if you prefer UT-to-UT
         
-        // 1. Map Gateway IP addresses to Gateway Nodes
-        std::map<Ipv4Address, Ptr<Node>> gwIpToNodeMap;
-        
-        for (uint32_t i = 0; i < gwNodes.GetN (); ++i)
-        {
-            Ptr<Node> gw = gwNodes.Get (i);
-            Ptr<Ipv4> ipv4 = gw->GetObject<Ipv4> ();
-            for (uint32_t j = 1; j < ipv4->GetNInterfaces (); ++j)
-            {
-                Ipv4Address addr = ipv4->GetAddress (j, 0).GetLocal ();
-                if (addr != Ipv4Address ()) {
-                    gwIpToNodeMap[addr] = gw;
-                }
-            }
-        }
-
-        // 2. Group UTs by the gateways they use (via Default Route)
-        std::map<Ptr<Node>, std::vector<Ptr<Node>>> gwToUtsMap;
-        Ipv4StaticRoutingHelper routingHelper;
-
-        for (uint32_t i = 0; i < utNodes.GetN (); ++i)
-        {
-            Ptr<Node> ut = utNodes.Get (i);
-            Ptr<Ipv4> ipv4 = ut->GetObject<Ipv4> ();
-            Ptr<Ipv4StaticRouting> staticRouting = routingHelper.GetStaticRouting (ipv4);
-            
-            if (staticRouting)
-            {
-                uint32_t numRoutes = staticRouting->GetNRoutes ();
-                for (uint32_t j = 0; j < numRoutes; ++j)
-                {
-                    Ipv4RoutingTableEntry route = staticRouting->GetRoute (j);
-                    
-                    // Check for default route (0.0.0.0)
-                    if (route.GetDest () == Ipv4Address::GetZero () && 
-                        route.GetDestNetworkMask () == Ipv4Mask::GetZero ())
-                    {
-                        Ipv4Address gwIp = route.GetGateway ();
-                        
-                        if (gwIpToNodeMap.count (gwIp) > 0) {
-                            Ptr<Node> associatedGw = gwIpToNodeMap[gwIp];
-                            gwToUtsMap[associatedGw].push_back (ut);
-                        }
-                        break; 
-                    }
-                }
-            }
-        }
-
-        // 3. Select source and sink from DIFFERENT GW groups
-        if (gwToUtsMap.size () >= 2)
-        {
-            auto it = gwToUtsMap.begin ();
-            std::vector<Ptr<Node>> group1 = it->second;
-            it++;
-            std::vector<Ptr<Node>> group2 = it->second;
-
-            sourceNode = group1[0];
-            sinkNode = group2[0]; 
-
-            std::cout << "Selected Source: UT Node " << sourceNode->GetId() 
-                      << " (via GW Node " << gwToUtsMap.begin ()->first->GetId()
-                      << ")" << std::endl;
-            std::cout << "Selected Sink:   UT Node " << sinkNode->GetId() 
-                      << " (via GW Node " << it->first->GetId() << ")" << std::endl;
-        }
-        else
-        {
-            std::cout << "WARNING: All UTs seem to be behind the SAME GW. Falling back to first/last UT." << std::endl;
-            sourceNode = utNodes.Get(0);
-            sinkNode = utNodes.Get(utNodes.GetN() - 1);
-        }
+        std::cout << "Selected Source: UT Node " << sourceNode->GetId() << std::endl;
+        std::cout << "Selected Sink:   GW User Node " << sinkNode->GetId() << std::endl;
+        std::cout << "Simulation is long enough for satellites to pass overhead." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Error: Not enough nodes." << std::endl;
+        return 1;
     }
 
     // Output IP for debugging
+    // GW User usually has IP on the second interface (index 1)
     Ipv4Address sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(1, 0).GetLocal();
+    if (sinkAddr == Ipv4Address()) {
+         // Try interface 2 if 1 is not set
+         sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(2, 0).GetLocal();
+    }
 
-    std::cout << "Source Node ID: " << sourceNode->GetId() 
-              << ", Sink Node ID: " << sinkNode->GetId() 
-              << ", Sink IP: " << sinkAddr << std::endl;
+    std::cout << "Sink IP: " << sinkAddr << std::endl;
 
     // Setup Socket
     uint16_t port = 9;
@@ -321,7 +227,7 @@ int main(int argc, char* argv[])
     Simulator::Stop(Seconds(simLength));
     Simulator::Run();
 
-    // === OUTPUT STATISTICS (From hap-sat-hap) ===
+    // === OUTPUT STATISTICS ===
     std::cout << "\n=== Network Map ===" << std::endl;
     std::cout << std::left << std::setw(10) << "NodeID"
               << std::left << std::setw(15) << "Name"
@@ -331,8 +237,8 @@ int main(int argc, char* argv[])
     NodeContainer nodesToPrint;
     nodesToPrint.Add(gwNodes);
     nodesToPrint.Add(gwUserNodes);
-    // Add UTs if you want to see their IPs
     nodesToPrint.Add(utNodes);
+    nodesToPrint.Add(satNodes);
 
     for (uint32_t i = 0; i < nodesToPrint.GetN(); ++i) {
         Ptr<Node> node = nodesToPrint.Get(i);
@@ -342,7 +248,6 @@ int main(int argc, char* argv[])
             uint32_t nIf = ipv4->GetNInterfaces();
             for (uint32_t j = 1; j < nIf; ++j) {
                 Ipv4Address addr = ipv4->GetAddress(j, 0).GetLocal();
-                // Filter out local loopback and irrelevant interfaces if necessary
                 if (addr != Ipv4Address()) {
                      std::cout << std::left << std::setw(10) << node->GetId()
                               << std::left << std::setw(15) << name
@@ -370,6 +275,8 @@ int main(int argc, char* argv[])
                   << std::right << std::setw(15) << count << std::endl;
     }
     std::cout << std::string(45, '-') << std::endl;
+    std::cout << "If you see packets routed through different SAT_X nodes," << std::endl;
+    std::cout << "it means the handover occurred successfully." << std::endl;
 
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
@@ -427,7 +334,7 @@ int main(int argc, char* argv[])
     }
     std::cout << std::string(95, '-') << std::endl;
 
-    monitor->SerializeToXmlFile("hap-constellation-hap-stats.xml", true, true);
+    monitor->SerializeToXmlFile("hap-handover-stats.xml", true, true);
     std::cout << "\n=== End of Simulation ===" << std::endl;
 
     Simulator::Destroy();
