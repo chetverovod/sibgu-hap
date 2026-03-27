@@ -42,7 +42,7 @@ class Colors:
     RTN = '\033[35m'  # Magenta
 
     # Общие цвета
-    RED = '\033[31m'  # Добавлено для исправления ошибки
+    RED = '\033[31m' 
     GREEN = '\033[32m'
 
 def get_color_for_event(event):
@@ -205,7 +205,8 @@ def run_display(log_filename, page_size=20):
         if is_filtered:
             controls = f"[Enter] Next | [b] Back | [c] Clear Filter | [Q] Quit"
         else:
-            controls = "[Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] MAC Search | [f <id>] Filter Pkt | [n/N] Next/Prev Search | [Q] Quit"
+            # ВОССТАНОВЛЕНА ПОДСКАЗКА ДЛЯ 'p'
+            controls = "[Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] MAC Search | [p <id>] Pkt Search | [f <id>] Filter Pkt | [n/N] Next/Prev | [Q] Quit"
             
         print(f"{Colors.BOLD}Controls:{Colors.RESET} {controls}")
 
@@ -264,7 +265,7 @@ def run_display(log_filename, page_size=20):
                         print("Usage: s <mac_address>")
                         input()
 
-                # Фильтрация по ID пакета (новая функция)
+                # Фильтрация по ID пакета
                 elif user_input.lower().startswith('f '):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) > 1:
@@ -291,7 +292,7 @@ def run_display(log_filename, page_size=20):
                         print("Usage: f <packet_id>")
                         input()
 
-                # Поиск по ID пакета (без фильтрации, только поиск)
+                # Поиск по ID пакета (подсветка и переход, без скрытия других)
                 elif user_input.lower().startswith('p '):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) > 1:
