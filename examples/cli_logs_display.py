@@ -41,6 +41,10 @@ class Colors:
     FWD = '\033[36m'  # Cyan
     RTN = '\033[35m'  # Magenta
 
+    # Общие цвета
+    RED = '\033[31m'  # Добавлено для исправления ошибки
+    GREEN = '\033[32m'
+
 def get_color_for_event(event):
     if event == 'SND': return Colors.SND
     if event == 'RCV': return Colors.RCV
@@ -121,162 +125,246 @@ def run_display(log_filename, page_size=20):
     entry_times = [e.time for e in entries]
 
     print(f"Loaded {total_entries} entries.")
-    # Удалено ожидание ввода для старта, начинаем сразу
 
     current_index = 0
     
-    # Переменные для поиска
+    # Переменные для поиска (Search Mode)
     search_indices = []
     current_search_pos = -1
     search_term = ""
 
+    # Переменные для фильтрации (Filter Mode)
+    is_filtered = False
+    filtered_indices = []
+    filtered_packet_id = None
+
     while True:
         clear_screen()
         
-        # Вывод статуса поиска или навигации
-        status_msg = f"CLI Packet Trace Viewer | Page {current_index // page_size + 1}/{(total_entries - 1) // page_size + 1}"
-        if search_indices:
-            status_msg += f" | Search: '{search_term}' [{current_search_pos + 1}/{len(search_indices)}]"
+        # --- Логика определения текущего режима и границ ---
+        display_entries = []
+        display_start = 0
+        display_end = 0
+        
+        if is_filtered:
+            # Режим фильтрации: показываем только записи из filtered_indices
+            total_viewable = len(filtered_indices)
+            
+            # Защита от выхода за границы списка
+            if current_index >= total_viewable:
+                current_index = max(0, total_viewable - 1)
+            elif current_index < 0:
+                current_index = 0
+
+            display_start = current_index
+            display_end = min(current_index + page_size, total_viewable)
+            
+            # Получаем реальные индексы из общего списка
+            real_indices = filtered_indices[display_start:display_end]
+            display_entries = [entries[i] for i in real_indices]
+            
+            status_suffix = f" | {Colors.BOLD}{Colors.RED}FILTERED ON PKT ID: {filtered_packet_id}{Colors.RESET} ({total_viewable} events)"
+        else:
+            # Обычный режим
+            if current_index >= total_entries:
+                current_index = total_entries - 1
+            elif current_index < 0:
+                current_index = 0
+                
+            display_start = current_index
+            display_end = min(current_index + page_size, total_entries)
+            display_entries = entries[display_start:display_end]
+            total_viewable = total_entries
+            
+            status_suffix = ""
+            if search_indices:
+                status_suffix += f" | Search: '{search_term}' [{current_search_pos + 1}/{len(search_indices)}]"
+
+        # --- Вывод на экран ---
+        status_msg = f"CLI Packet Trace Viewer | Page {display_start // page_size + 1}/{(total_viewable - 1) // page_size + 1}"
+        status_msg += status_suffix
         
         print(f"{Colors.BOLD}{status_msg}{Colors.RESET}")
         print_header()
         
-        # Вывод страницы
-        end_index = min(current_index + page_size, total_entries)
-        
-        # Определяем, какие строки подсветить (если они есть в текущем поиске)
-        current_page_indices = set(range(current_index, end_index))
-        
-        for i in range(current_index, end_index):
-            # Проверяем, является ли текущая строка результатом поиска
+        # Вывод строк
+        for i, entry in enumerate(display_entries):
             is_match = False
-            if search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
-                # Подсвечиваем, если текущий индекс совпадает с найденным
-                if i == search_indices[current_search_pos]:
+            if not is_filtered and search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
+                # В обычном режиме подсвечиваем результат поиска
+                # real_idx - это индекс в основном массиве entries
+                real_idx = display_start + i
+                if real_idx == search_indices[current_search_pos]:
                     is_match = True
             
-            print(format_entry(entries[i], highlight=is_match))
+            print(format_entry(entry, highlight=is_match))
         
-        print(f"\nShowing entries {current_index + 1} - {end_index} of {total_entries}")
-        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] MAC Search | [p <id>] Pkt Search | [n/N] Next/Prev | [Q] Quit")
+        print(f"\nShowing entries {display_start + 1} - {display_end} of {total_viewable}")
+        
+        # --- Подсказка управления ---
+        if is_filtered:
+            controls = f"[Enter] Next | [b] Back | [c] Clear Filter | [Q] Quit"
+        else:
+            controls = "[Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] MAC Search | [f <id>] Filter Pkt | [n/N] Next/Prev Search | [Q] Quit"
+            
+        print(f"{Colors.BOLD}Controls:{Colors.RESET} {controls}")
 
-        # Ожидание ввода пользователя
+        # --- Обработка ввода ---
         try:
             user_input = input("> ").strip()
             
             if user_input.lower() == 'q':
                 break
             
-            # Навигация по страницам
+            # --- Команды, работающие в обоих режимах ---
             elif not user_input:
                 current_index += page_size
             elif user_input.lower() == 'b':
                 current_index = max(0, current_index - page_size)
             
-            # Поиск по MAC
-            elif user_input.lower().startswith('s '):
-                parts = user_input.split(maxsplit=1)
-                if len(parts) > 1:
-                    search_term = f"MAC: {parts[1]}"
-                    term_lower = parts[1].lower()
-                    # Ищем по MAC узла, Source MAC или Dest MAC
-                    search_indices = [
-                        i for i, e in enumerate(entries) 
-                        if term_lower in e.mac.lower() or 
-                           (e.src_mac and term_lower in e.src_mac.lower()) or 
-                           (e.dst_mac and term_lower in e.dst_mac.lower())
-                    ]
-                    current_search_pos = -1
-                    if search_indices:
-                        # Переходим к первому результату
-                        current_search_pos = 0
-                        current_index = search_indices[0]
-                    else:
-                        print(f"No matches found for MAC '{parts[1]}'. Press Enter...")
-                        input() 
+            # --- Команды режима Фильтрации ---
+            elif user_input.lower() == 'c':
+                if is_filtered:
+                    # Возвращаемся к полному логу, пытаясь сохранить позицию по времени
+                    try:
+                        current_real_idx = filtered_indices[current_index]
+                        current_time = entries[current_real_idx].time
+                        is_filtered = False
+                        idx = bisect.bisect_left(entry_times, current_time)
+                        current_index = idx
+                    except:
+                        is_filtered = False
+                        current_index = 0
                 else:
-                    print("Usage: s <mac_address>")
+                    print("Not in filter mode.")
                     input()
             
-            # Поиск по ID пакета
-            elif user_input.lower().startswith('p '):
-                parts = user_input.split(maxsplit=1)
-                if len(parts) > 1:
-                    try:
-                        target_pid = int(parts[1])
-                        search_term = f"Packet ID: {target_pid}"
-                        # Ищем по ID пакета
+            # --- Команды только для Обычного режима ---
+            elif not is_filtered:
+                # Поиск по MAC
+                if user_input.lower().startswith('s '):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) > 1:
+                        search_term = f"MAC: {parts[1]}"
+                        term_lower = parts[1].lower()
                         search_indices = [
                             i for i, e in enumerate(entries) 
-                            if e.packet_id == target_pid
+                            if term_lower in e.mac.lower() or 
+                               (e.src_mac and term_lower in e.src_mac.lower()) or 
+                               (e.dst_mac and term_lower in e.dst_mac.lower())
                         ]
                         current_search_pos = -1
                         if search_indices:
-                            # Переходим к первому результату
                             current_search_pos = 0
                             current_index = search_indices[0]
                         else:
-                            print(f"No matches found for Packet ID '{target_pid}'. Press Enter...")
+                            print(f"No matches found for MAC '{parts[1]}'. Press Enter...")
+                            input() 
+                    else:
+                        print("Usage: s <mac_address>")
+                        input()
+
+                # Фильтрация по ID пакета (новая функция)
+                elif user_input.lower().startswith('f '):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) > 1:
+                        try:
+                            target_pid = int(parts[1])
+                            filtered_packet_id = target_pid
+                            filtered_indices = [
+                                i for i, e in enumerate(entries) 
+                                if e.packet_id == target_pid
+                            ]
+                            if filtered_indices:
+                                is_filtered = True
+                                current_index = 0
+                                # Сбрасываем поиск, чтобы не было конфликтов
+                                search_indices = []
+                                search_term = ""
+                            else:
+                                print(f"No events found for Packet ID '{target_pid}'. Press Enter...")
+                                input()
+                        except ValueError:
+                            print("Invalid Packet ID. Use integer (e.g., 42)")
                             input()
-                    except ValueError:
-                        print("Invalid Packet ID. Use integer (e.g., 42)")
-                        input()
-                else:
-                    print("Usage: p <packet_id>")
-                    input()
-
-            # Навигация по результатам поиска (общая для MAC и Packet ID)
-            elif user_input.lower() == 'n':
-                if search_indices:
-                    if current_search_pos + 1 < len(search_indices):
-                        current_search_pos += 1
-                        current_index = search_indices[current_search_pos]
                     else:
-                        print("End of search results.")
+                        print("Usage: f <packet_id>")
                         input()
-                else:
-                    print("No active search. Use 's <mac>' or 'p <id>' first.")
-                    input()
-            
-            elif user_input == 'N': # Shift-n
-                if search_indices:
-                    if current_search_pos > 0:
-                        current_search_pos -= 1
-                        current_index = search_indices[current_search_pos]
-                    else:
-                        print("Start of search results.")
-                        input()
-                else:
-                    print("No active search. Use 's <mac>' or 'p <id>' first.")
-                    input()
 
-            # Переход по времени
-            elif user_input.lower().startswith('t '):
-                parts = user_input.split(maxsplit=1)
-                if len(parts) > 1:
-                    try:
-                        target_time = float(parts[1])
-                        # Бинарный поиск для нахождения индекса
-                        idx = bisect.bisect_left(entry_times, target_time)
-                        if idx < total_entries:
-                            current_index = idx
+                # Поиск по ID пакета (без фильтрации, только поиск)
+                elif user_input.lower().startswith('p '):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) > 1:
+                        try:
+                            target_pid = int(parts[1])
+                            search_term = f"Packet ID: {target_pid}"
+                            search_indices = [
+                                i for i, e in enumerate(entries) 
+                                if e.packet_id == target_pid
+                            ]
+                            current_search_pos = -1
+                            if search_indices:
+                                current_search_pos = 0
+                                current_index = search_indices[0]
+                            else:
+                                print(f"No matches found for Packet ID '{target_pid}'. Press Enter...")
+                                input()
+                        except ValueError:
+                            print("Invalid Packet ID. Use integer (e.g., 42)")
+                            input()
+                    else:
+                        print("Usage: p <packet_id>")
+                        input()
+
+                # Навигация по результатам поиска
+                elif user_input.lower() == 'n':
+                    if search_indices:
+                        if current_search_pos + 1 < len(search_indices):
+                            current_search_pos += 1
+                            current_index = search_indices[current_search_pos]
                         else:
-                            current_index = total_entries - 1 # Переход в конец, если время больше последнего
-                    except ValueError:
-                        print("Invalid time format. Use float (e.g., 1.5)")
+                            print("End of search results.")
+                            input()
+                    else:
+                        print("No active search. Use 's <mac>' or 'p <id>' first.")
                         input()
-                else:
-                    print("Usage: t <time>")
-                    input()
+                
+                elif user_input == 'N':
+                    if search_indices:
+                        if current_search_pos > 0:
+                            current_search_pos -= 1
+                            current_index = search_indices[current_search_pos]
+                        else:
+                            print("Start of search results.")
+                            input()
+                    else:
+                        print("No active search. Use 's <mac>' or 'p <id>' first.")
+                        input()
+
+                # Переход по времени
+                elif user_input.lower().startswith('t '):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) > 1:
+                        try:
+                            target_time = float(parts[1])
+                            idx = bisect.bisect_left(entry_times, target_time)
+                            if idx < total_entries:
+                                current_index = idx
+                            else:
+                                current_index = total_entries - 1
+                        except ValueError:
+                            print("Invalid time format. Use float (e.g., 1.5)")
+                            input()
+                    else:
+                        print("Usage: t <time>")
+                        input()
+            
+            else:
+                print("Command not available in Filter Mode. Press [c] to exit filter first.")
+                input()
 
         except (EOFError, KeyboardInterrupt):
             break
-        
-        # Проверка границ
-        if current_index >= total_entries:
-            current_index = total_entries - 1
-        elif current_index < 0:
-            current_index = 0
 
     print(f"\n{Colors.BOLD}End of trace.{Colors.RESET}")
 
