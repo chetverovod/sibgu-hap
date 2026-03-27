@@ -1,12 +1,13 @@
 /*
  * File: hap-constellation-hap.cc
- * Scenario: Handover in a LEO Constellation.
- * 
- * CHANGE LOG:
- * 1. Switched scenario to "constellation-iridium" (LEO) to allow satellites to move out of visibility.
- * 2. Increased simulation time to 300 seconds to ensure satellites pass overhead.
- * 3. Simplified node selection (Source=UT0, Sink=GW0) to observe natural handover.
- * 4. Removed "MakeLinkToScenario" as we use a standard built-in scenario.
+ * Scenario: Fast Handover in Iridium LEO Constellation.
+ *
+ * FEATURES:
+ * 1. Uses the correct scenario folder: "constellation-iridium-next-66-sats".
+ * 2. OPTIMIZATION: Uses SetBeamSet to limit topology to 2 beams.
+ *    This reduces simulation time from HOURS to MINUTES.
+ * 3. RELIABILITY: Uses UT-to-UT traffic to ensure packets are delivered
+ *    and routing works during handover.
  */
 
 #include "ns3/core-module.h"
@@ -35,7 +36,6 @@ std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_hopStats;
 std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
      NodeContainer userNodes, NodeContainer satNodes, NodeContainer utNodes)
 {
-    // 1. Standard checks against lists
     for (uint32_t i = 0; i < satNodes.GetN(); ++i) {
         if (id == satNodes.Get(i)->GetId()) return "SAT_" + std::to_string(i+1);
     }
@@ -48,7 +48,6 @@ std::string GetNodeName(uint32_t id, NodeContainer gwNodes,
     for (uint32_t i = 0; i < userNodes.GetN(); ++i) {
         if (id == userNodes.Get(i)->GetId()) return "GW_USER_" + std::to_string(i+1);
     }
-
     return "Node_" + std::to_string(id);
 }
 
@@ -109,10 +108,11 @@ static void GenerateTraffic(Ptr<Socket> socket, uint32_t pktSize,
 int main(int argc, char* argv[])
 {
     uint32_t packetSize = 1500;
-    uint32_t numPackets = 10000; // Increased to cover the longer simulation
-    std::string intervalStr("50ms");
-    double simLength = 300.0; // 5 minutes to allow satellites to pass
-    // Using Iridium (LEO) constellation. Satellites move fast relative to ground.
+    uint32_t numPackets = 5000;
+    std::string intervalStr("100ms");
+    //double simLength = 600.0; // 10 minutes - sufficient for LEO movement
+    double simLength = 300.0; // 10 minutes - sufficient for LEO movement
+    // CORRECT SCENARIO NAME from your working example
     std::string scenarioFolder = "constellation-iridium-next-66-sats";
    
     CommandLine cmd;
@@ -128,7 +128,6 @@ int main(int argc, char* argv[])
     
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(false));
 
-    // Regeneration mode for ISLs (Iridium uses ISLs)
     Config::SetDefault("ns3::SatConf::ForwardLinkRegenerationMode",
                        EnumValue(SatEnums::REGENERATION_NETWORK));
     Config::SetDefault("ns3::SatConf::ReturnLinkRegenerationMode",
@@ -141,10 +140,8 @@ int main(int argc, char* argv[])
                        DataRateValue(DataRate("100Mb/s")));
     
     Config::SetDefault("ns3::SatSGP4MobilityModel::UpdatePositionEachRequest", BooleanValue(false));
-    Config::SetDefault("ns3::SatSGP4MobilityModel::UpdatePositionPeriod", TimeValue(Seconds(1)));
+    Config::SetDefault("ns3::SatSGP4MobilityModel::UpdatePositionPeriod", TimeValue(Seconds(10)));
 
-    // Use EM_NONE for geometric handover (link breaks when satellite moves out of beam/visibility)
-    // If you want signal-quality based handover, you would need EM_AVM and fading traces.
     SatPhyRxCarrierConf::ErrorModel em(SatPhyRxCarrierConf::EM_NONE);
     Config::SetDefault("ns3::SatUtHelper::FwdLinkErrorModel", EnumValue(em));
     Config::SetDefault("ns3::SatGwHelper::RtnLinkErrorModel", EnumValue(em));
@@ -154,57 +151,110 @@ int main(int argc, char* argv[])
     Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>("hap-sat-handover");
     simulationHelper->SetSimulationTime(simLength);
     simulationHelper->LoadScenario(scenarioFolder);
-    simulationHelper->SetUserCountPerUt (1); 
     
-    // Note: We do NOT use MakeLinkToScenario here because "constellation-iridium" is a standard
-    // scenario included in the ns-3-satellite module.
+    // OPTIMIZATION: Limit to 2 specific beams.
+    // Without this, NS-3 loads ALL beams (hundreds), causing hours of simulation time.
+    // Beam 1 and Beam 24 are likely far apart, ensuring different satellites are used.
+    //std::set<uint32_t> beams = {1, 24}; 
+    std::set<uint32_t> beams = {1, 72}; 
+    simulationHelper->SetBeamSet(beams);
+    simulationHelper->SetUserCountPerUt(1); 
 
     simulationHelper->CreateSatScenario(SatHelper::FULL);   
 
-    Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
-
-    // === TRACING ===
-    Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Tx", MakeCallback(&Ipv4TxTrace));
-    Config::Connect("/NodeList/*/$ns3::Ipv4L3Protocol/Rx", MakeCallback(&Ipv4RxTrace));
+  // === TRACING ===
     
+    // 1. Сначала получаем доступ к топологии и спутникам
+    Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
+    NodeContainer satNodes = topology->GetOrbiterNodes(); 
+    
+    // 2. Теперь переменная satNodes видна здесь, и мы можем использовать её в цикле
+    for (uint32_t i = 0; i < satNodes.GetN (); ++i)
+    {
+        Ptr<Node> sat = satNodes.Get (i);
+        Ptr<Ipv4> ipv4 = sat->GetObject<Ipv4> ();
+        if (ipv4)
+        {
+            // Используем TraceConnect, потому что ваш колбэк Ipv4TxTrace принимает "std::string context"
+            // Если использовать TraceConnectWithoutContext, будет ошибка компиляции несоответствия типов
+            ipv4->TraceConnect ("Tx", "SatTx", MakeCallback (&Ipv4TxTrace));
+            ipv4->TraceConnect ("Rx", "SatRx", MakeCallback (&Ipv4RxTrace));
+        }
+    }
     // === TRAFFIC SETUP ===
+/*    
     NodeContainer utNodes = topology->GetUtNodes();
     NodeContainer gwNodes = topology->GetGwNodes();
     NodeContainer gwUserNodes = topology->GetGwUserNodes();
     NodeContainer satNodes = topology->GetOrbiterNodes(); 
     
-    std::cout << "Found " << satNodes.GetN() << " Satellites in constellation." << std::endl;
-    std::cout << "Found " << utNodes.GetN() << " UTs." << std::endl;
+    std::cout << "Found " << satNodes.GetN() << " Satellites." << std::endl;
+    std::cout << "Found " << utNodes.GetN() << " UTs (limited by BeamSet)." << std::endl;
 
     Ptr<Node> sourceNode;
     Ptr<Node> sinkNode;
 
-    // Simple selection: Use the first UT and the first GW User.
-    // As the simulation runs, the UT will naturally switch satellites as they orbit.
-    if (utNodes.GetN() > 0 && gwUserNodes.GetN() > 0)
+    // SELECTION STRATEGY: UT to UT.
+    // We select UT_1 and UT_2. They are in the same subnet (10.x.x.x),
+    // which makes routing much more reliable than UT->GW_User in complex topologies.
+    if (utNodes.GetN() >= 2)
     {
         sourceNode = utNodes.Get(0);
-        sinkNode = gwUserNodes.Get(0); // Or another UT if you prefer UT-to-UT
+        sinkNode = utNodes.Get(1);
         
         std::cout << "Selected Source: UT Node " << sourceNode->GetId() << std::endl;
-        std::cout << "Selected Sink:   GW User Node " << sinkNode->GetId() << std::endl;
-        std::cout << "Simulation is long enough for satellites to pass overhead." << std::endl;
+        std::cout << "Selected Sink:   UT Node " << sinkNode->GetId() << std::endl;
+        std::cout << "Simulation will run for " << simLength << " seconds to observe handover." << std::endl;
     }
     else
     {
-        std::cerr << "Error: Not enough nodes." << std::endl;
+        std::cerr << "Error: Need at least 2 UTs. Found: " << utNodes.GetN() << std::endl;
+        std::cerr << "Try changing BeamSet in the code." << std::endl;
         return 1;
     }
 
-    // Output IP for debugging
-    // GW User usually has IP on the second interface (index 1)
+    // UTs usually have IP on interface 1 (e.g. 10.1.0.1)
     Ipv4Address sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(1, 0).GetLocal();
-    if (sinkAddr == Ipv4Address()) {
-         // Try interface 2 if 1 is not set
-         sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(2, 0).GetLocal();
-    }
 
     std::cout << "Sink IP: " << sinkAddr << std::endl;
+    */
+
+
+       // === TRAFFIC SETUP ===
+    NodeContainer utNodes = topology->GetUtNodes();
+    NodeContainer gwNodes = topology->GetGwNodes();
+    NodeContainer gwUserNodes = topology->GetGwUserNodes(); // Убедитесь, что этот контейнер есть
+    //NodeContainer satNodes = topology->GetOrbiterNodes(); 
+    
+    std::cout << "Found " << satNodes.GetN() << " Satellites." << std::endl;
+    std::cout << "Found " << utNodes.GetN() << " UTs (limited by BeamSet)." << std::endl;
+    std::cout << "Found " << gwUserNodes.GetN() << " GW Users." << std::endl;
+
+    Ptr<Node> sourceNode;
+    Ptr<Node> sinkNode;
+
+    // ИСПРАВЛЕНИЕ: Используем UT как источник, а GW User как приемник.
+    // Это гарантирует, что маршрут существует (UT -> Sat -> GW -> GW User).
+    if (utNodes.GetN() >= 1 && gwUserNodes.GetN() >= 1)
+    {
+        sourceNode = utNodes.Get(0); // Источник: UT_1
+        sinkNode = gwUserNodes.Get(0); // Приемник: GW User (пользователь шлюза)
+        
+        std::cout << "Selected Source: UT Node " << sourceNode->GetId() << std::endl;
+        std::cout << "Selected Sink:   GW User Node " << sinkNode->GetId() << std::endl;
+        std::cout << "Simulation will run for " << simLength << " seconds to observe handover." << std::endl;
+    }
+    else
+    {
+        std::cerr << "Error: Need at least 1 UT and 1 GW User." << std::endl;
+        return 1;
+    }
+
+    // Получаем IP адрес приемника. Обычно это интерфейс 1 (после loopback)
+    Ipv4Address sinkAddr = sinkNode->GetObject<Ipv4>()->GetAddress(1, 0).GetLocal();
+
+    std::cout << "Sink IP: " << sinkAddr << std::endl;
+
 
     // Setup Socket
     uint16_t port = 9;
@@ -235,9 +285,8 @@ int main(int argc, char* argv[])
     std::cout << std::string(43, '-') << std::endl;
 
     NodeContainer nodesToPrint;
-    nodesToPrint.Add(gwNodes);
-    nodesToPrint.Add(gwUserNodes);
-    nodesToPrint.Add(utNodes);
+    nodesToPrint.Add(sourceNode);
+    nodesToPrint.Add(sinkNode);
     nodesToPrint.Add(satNodes);
 
     for (uint32_t i = 0; i < nodesToPrint.GetN(); ++i) {
@@ -275,8 +324,7 @@ int main(int argc, char* argv[])
                   << std::right << std::setw(15) << count << std::endl;
     }
     std::cout << std::string(45, '-') << std::endl;
-    std::cout << "If you see packets routed through different SAT_X nodes," << std::endl;
-    std::cout << "it means the handover occurred successfully." << std::endl;
+    std::cout << "If you see UT_1 sending to SAT_X and later SAT_Y, handover is working!" << std::endl;
 
     monitor->CheckForLostPackets();
     Ptr<Ipv4FlowClassifier> classifier = DynamicCast<Ipv4FlowClassifier>(flowmon.GetClassifier());
