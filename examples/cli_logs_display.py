@@ -22,6 +22,7 @@ import os
 import sys
 import argparse
 import bisect
+import re  # Добавлено для парсинга фильтра устройств
 
 import cli_logs_parser
 
@@ -134,9 +135,12 @@ def run_display(log_filename, page_size=20):
     search_term = ""
 
     # Переменные для фильтрации (Filter Mode)
-    is_filtered = False
+    # filter_mode может быть: None, 'packet', 'device'
+    filter_mode = None 
+    filter_description = ""
     filtered_indices = []
-    filtered_packet_id = None
+    # Сохраняем ID пакета или устройства для справки, если нужно
+    filtered_target_id = None 
 
     while True:
         clear_screen()
@@ -146,8 +150,8 @@ def run_display(log_filename, page_size=20):
         display_start = 0
         display_end = 0
         
-        if is_filtered:
-            # Режим фильтрации: показываем только записи из filtered_indices
+        if filter_mode is not None:
+            # Режим фильтрации (пакет или устройство)
             total_viewable = len(filtered_indices)
             
             # Защита от выхода за границы списка
@@ -163,7 +167,10 @@ def run_display(log_filename, page_size=20):
             real_indices = filtered_indices[display_start:display_end]
             display_entries = [entries[i] for i in real_indices]
             
-            status_suffix = f" | {Colors.BOLD}{Colors.RED}FILTERED ON PKT ID: {filtered_packet_id}{Colors.RESET} ({total_viewable} events)"
+            if filter_mode == 'packet':
+                status_suffix = f" | {Colors.BOLD}{Colors.RED}FILTERED ON PKT ID: {filtered_target_id}{Colors.RESET} ({total_viewable} events)"
+            else: # device
+                status_suffix = f" | {Colors.BOLD}{Colors.RED}FILTERED ON DEV: {filter_description}{Colors.RESET} ({total_viewable} events)"
         else:
             # Обычный режим
             if current_index >= total_entries:
@@ -190,8 +197,8 @@ def run_display(log_filename, page_size=20):
         # Вывод строк
         for i, entry in enumerate(display_entries):
             is_match = False
-            if not is_filtered and search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
-                # В обычном режиме подсвечиваем результат поиска
+            # Подсветка поиска работает только если не в режиме фильтрации
+            if filter_mode is None and search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
                 # real_idx - это индекс в основном массиве entries
                 real_idx = display_start + i
                 if real_idx == search_indices[current_search_pos]:
@@ -201,14 +208,14 @@ def run_display(log_filename, page_size=20):
         
         print(f"\nShowing entries {display_start + 1} - {display_end} of {total_viewable}")
         
-        # --- Подсказка управления ---
-        if is_filtered:
-            controls = f"[Enter] Next | [b] Back | [c] Clear Filter | [Q] Quit"
+        # --- Подсказка управления (разбита на 2 строки) ---
+        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [Q] Quit")
+        
+        if filter_mode is not None:
+            print(f"{Colors.BOLD}         {Colors.RESET} [c] Clear Filter")
         else:
-            # ВОССТАНОВЛЕНА ПОДСКАЗКА ДЛЯ 'p'
-            controls = "[Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] MAC Search | [p <id>] Pkt Search | [f <id>] Filter Pkt | [n/N] Next/Prev | [Q] Quit"
-            
-        print(f"{Colors.BOLD}Controls:{Colors.RESET} {controls}")
+            print(f"{Colors.BOLD}         {Colors.RESET} [s <mac>] Search MAC | [p <id>] Search Pkt | [f <id>] Filter Pkt |")
+            print(f"{Colors.BOLD}         {Colors.RESET} [d <type><id>] Filter Dev | [n/N] Next/Prev")
 
         # --- Обработка ввода ---
         try:
@@ -225,23 +232,25 @@ def run_display(log_filename, page_size=20):
             
             # --- Команды режима Фильтрации ---
             elif user_input.lower() == 'c':
-                if is_filtered:
+                if filter_mode is not None:
                     # Возвращаемся к полному логу, пытаясь сохранить позицию по времени
                     try:
                         current_real_idx = filtered_indices[current_index]
                         current_time = entries[current_real_idx].time
-                        is_filtered = False
+                        filter_mode = None
+                        filtered_indices = []
                         idx = bisect.bisect_left(entry_times, current_time)
                         current_index = idx
                     except:
-                        is_filtered = False
+                        filter_mode = None
+                        filtered_indices = []
                         current_index = 0
                 else:
                     print("Not in filter mode.")
                     input()
             
             # --- Команды только для Обычного режима ---
-            elif not is_filtered:
+            elif filter_mode is None:
                 # Поиск по MAC
                 if user_input.lower().startswith('s '):
                     parts = user_input.split(maxsplit=1)
@@ -271,15 +280,15 @@ def run_display(log_filename, page_size=20):
                     if len(parts) > 1:
                         try:
                             target_pid = int(parts[1])
-                            filtered_packet_id = target_pid
+                            filtered_target_id = target_pid
                             filtered_indices = [
                                 i for i, e in enumerate(entries) 
                                 if e.packet_id == target_pid
                             ]
                             if filtered_indices:
-                                is_filtered = True
+                                filter_mode = 'packet'
                                 current_index = 0
-                                # Сбрасываем поиск, чтобы не было конфликтов
+                                # Сбрасываем поиск
                                 search_indices = []
                                 search_term = ""
                             else:
@@ -292,7 +301,7 @@ def run_display(log_filename, page_size=20):
                         print("Usage: f <packet_id>")
                         input()
 
-                # Поиск по ID пакета (подсветка и переход, без скрытия других)
+                # Поиск по ID пакета (без фильтрации)
                 elif user_input.lower().startswith('p '):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) > 1:
@@ -315,6 +324,37 @@ def run_display(log_filename, page_size=20):
                             input()
                     else:
                         print("Usage: p <packet_id>")
+                        input()
+
+                # Фильтрация по Устройству (НОВОЕ)
+                elif user_input.lower().startswith('d '):
+                    parts = user_input.split(maxsplit=1)
+                    if len(parts) > 1:
+                        # Парсинг строки вида "SAT1", "UT10", "GW0"
+                        match = re.match(r'^([A-Z]+)(\d+)$', parts[1])
+                        if match:
+                            target_type = match.group(1)
+                            target_id = int(match.group(2))
+                            filter_description = f"{target_type}{target_id}"
+                            
+                            filtered_indices = [
+                                i for i, e in enumerate(entries) 
+                                if e.node_type == target_type and e.node_id == target_id
+                            ]
+                            if filtered_indices:
+                                filter_mode = 'device'
+                                filtered_target_id = target_id # храним для справки
+                                current_index = 0
+                                search_indices = []
+                                search_term = ""
+                            else:
+                                print(f"No events found for Device '{filter_description}'. Press Enter...")
+                                input()
+                        else:
+                            print("Invalid format. Use 'd SAT1' or 'd UT4'. Press Enter...")
+                            input()
+                    else:
+                        print("Usage: d <type><id> (e.g., d SAT1)")
                         input()
 
                 # Навигация по результатам поиска
