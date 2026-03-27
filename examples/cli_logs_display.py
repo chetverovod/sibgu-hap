@@ -122,7 +122,6 @@ def run_display(log_filename, page_size=20):
 
     print(f"Loaded {total_entries} entries.")
     # Удалено ожидание ввода для старта, начинаем сразу
-    # input("Press Enter to start...") 
 
     current_index = 0
     
@@ -153,15 +152,13 @@ def run_display(log_filename, page_size=20):
             is_match = False
             if search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
                 # Подсвечиваем, если текущий индекс совпадает с найденным
-                # ИЛИ если мы просто показываем список, где есть совпадения (опционально)
-                # Здесь подсветим только конкретный найденный элемент, на который мы прыгнули
                 if i == search_indices[current_search_pos]:
                     is_match = True
             
             print(format_entry(entries[i], highlight=is_match))
         
         print(f"\nShowing entries {current_index + 1} - {end_index} of {total_entries}")
-        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] Search | [n/N] Next/Prev Search | [Q] Quit")
+        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] MAC Search | [p <id>] Pkt Search | [n/N] Next/Prev | [Q] Quit")
 
         # Ожидание ввода пользователя
         try:
@@ -176,17 +173,18 @@ def run_display(log_filename, page_size=20):
             elif user_input.lower() == 'b':
                 current_index = max(0, current_index - page_size)
             
-            # Поиск
+            # Поиск по MAC
             elif user_input.lower().startswith('s '):
                 parts = user_input.split(maxsplit=1)
                 if len(parts) > 1:
-                    search_term = parts[1].lower()
+                    search_term = f"MAC: {parts[1]}"
+                    term_lower = parts[1].lower()
                     # Ищем по MAC узла, Source MAC или Dest MAC
                     search_indices = [
                         i for i, e in enumerate(entries) 
-                        if search_term in e.mac.lower() or 
-                           (e.src_mac and search_term in e.src_mac.lower()) or 
-                           (e.dst_mac and search_term in e.dst_mac.lower())
+                        if term_lower in e.mac.lower() or 
+                           (e.src_mac and term_lower in e.src_mac.lower()) or 
+                           (e.dst_mac and term_lower in e.dst_mac.lower())
                     ]
                     current_search_pos = -1
                     if search_indices:
@@ -194,14 +192,40 @@ def run_display(log_filename, page_size=20):
                         current_search_pos = 0
                         current_index = search_indices[0]
                     else:
-                        # Вывод сообщения об ошибке на секунду (эмуляция через print перед очисткой в следующем цикле)
-                        print(f"No matches found for '{search_term}'. Press Enter...")
+                        print(f"No matches found for MAC '{parts[1]}'. Press Enter...")
                         input() 
                 else:
                     print("Usage: s <mac_address>")
                     input()
+            
+            # Поиск по ID пакета
+            elif user_input.lower().startswith('p '):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) > 1:
+                    try:
+                        target_pid = int(parts[1])
+                        search_term = f"Packet ID: {target_pid}"
+                        # Ищем по ID пакета
+                        search_indices = [
+                            i for i, e in enumerate(entries) 
+                            if e.packet_id == target_pid
+                        ]
+                        current_search_pos = -1
+                        if search_indices:
+                            # Переходим к первому результату
+                            current_search_pos = 0
+                            current_index = search_indices[0]
+                        else:
+                            print(f"No matches found for Packet ID '{target_pid}'. Press Enter...")
+                            input()
+                    except ValueError:
+                        print("Invalid Packet ID. Use integer (e.g., 42)")
+                        input()
+                else:
+                    print("Usage: p <packet_id>")
+                    input()
 
-            # Навигация по результатам поиска
+            # Навигация по результатам поиска (общая для MAC и Packet ID)
             elif user_input.lower() == 'n':
                 if search_indices:
                     if current_search_pos + 1 < len(search_indices):
@@ -211,7 +235,7 @@ def run_display(log_filename, page_size=20):
                         print("End of search results.")
                         input()
                 else:
-                    print("No active search. Use 's <mac>' first.")
+                    print("No active search. Use 's <mac>' or 'p <id>' first.")
                     input()
             
             elif user_input == 'N': # Shift-n
@@ -223,7 +247,7 @@ def run_display(log_filename, page_size=20):
                         print("Start of search results.")
                         input()
                 else:
-                    print("No active search. Use 's <mac>' first.")
+                    print("No active search. Use 's <mac>' or 'p <id>' first.")
                     input()
 
             # Переход по времени
