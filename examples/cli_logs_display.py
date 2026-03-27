@@ -22,7 +22,7 @@ import os
 import sys
 import argparse
 import bisect
-import re  # Добавлено для парсинга фильтра устройств
+import re
 
 import cli_logs_parser
 
@@ -45,6 +45,7 @@ class Colors:
     # Общие цвета
     RED = '\033[31m' 
     GREEN = '\033[32m'
+    CYAN = '\033[36m'
 
 def get_color_for_event(event):
     if event == 'SND': return Colors.SND
@@ -60,6 +61,30 @@ def get_color_for_direction(direction):
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
+
+def get_unique_devices(entries):
+    """Собирает уникальные устройства из лога."""
+    devices = set()
+    for e in entries:
+        devices.add((e.node_type, e.node_id))
+    # Сортируем: сначала по типу, потом по ID
+    return sorted(list(devices), key=lambda x: (x[0], x[1]))
+
+def show_device_list(devices):
+    """Отображает список устройств на отдельном экране."""
+    clear_screen()
+    print(f"{Colors.BOLD}List of Devices Found in Log:{Colors.RESET}")
+    print("-" * 30)
+    if not devices:
+        print("No devices found.")
+    else:
+        # Форматный вывод
+        print(f"{'Type':<5} | {'ID':<5}")
+        print("-" * 15)
+        for dtype, did in devices:
+            print(f"{dtype:<5} | {did:<5}")
+    print("\nPress Enter to return to viewer...")
+    input()
 
 def format_entry(entry, highlight=False):
     """Форматирует одну запись лога в строку таблицы."""
@@ -139,7 +164,6 @@ def run_display(log_filename, page_size=20):
     filter_mode = None 
     filter_description = ""
     filtered_indices = []
-    # Сохраняем ID пакета или устройства для справки, если нужно
     filtered_target_id = None 
 
     while True:
@@ -209,13 +233,13 @@ def run_display(log_filename, page_size=20):
         print(f"\nShowing entries {display_start + 1} - {display_end} of {total_viewable}")
         
         # --- Подсказка управления (разбита на 2 строки) ---
-        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [Q] Quit")
+        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [l] List Devs | [Q] Quit")
         
         if filter_mode is not None:
             print(f"{Colors.BOLD}         {Colors.RESET} [c] Clear Filter")
         else:
             print(f"{Colors.BOLD}         {Colors.RESET} [s <mac>] Search MAC | [p <id>] Search Pkt | [f <id>] Filter Pkt |")
-            print(f"{Colors.BOLD}         {Colors.RESET} [d <type><id>] Filter Dev | [n/N] Next/Prev")
+            print(f"{Colors.BOLD}         {Colors.RESET} [d <type1><id1> [| <type2><id2> |...]] Filter Devs | [n/N] Next/Prev")
 
         # --- Обработка ввода ---
         try:
@@ -251,8 +275,13 @@ def run_display(log_filename, page_size=20):
             
             # --- Команды только для Обычного режима ---
             elif filter_mode is None:
+                # Команда вывода списка устройств (НОВОЕ)
+                if user_input.lower() == 'l':
+                    devices = get_unique_devices(entries)
+                    show_device_list(devices)
+
                 # Поиск по MAC
-                if user_input.lower().startswith('s '):
+                elif user_input.lower().startswith('s '):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) > 1:
                         search_term = f"MAC: {parts[1]}"
@@ -326,36 +355,58 @@ def run_display(log_filename, page_size=20):
                         print("Usage: p <packet_id>")
                         input()
 
-                # Фильтрация по Устройству (НОВОЕ)
+                # Фильтрация по Устройствам (Обновлено для поддержки нескольких)
                 elif user_input.lower().startswith('d '):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) > 1:
-                        # Парсинг строки вида "SAT1", "UT10", "GW0"
-                        match = re.match(r'^([A-Z]+)(\d+)$', parts[1])
-                        if match:
-                            target_type = match.group(1)
-                            target_id = int(match.group(2))
-                            filter_description = f"{target_type}{target_id}"
+                    # Получаем аргументы после 'd '
+                    args_str = user_input[2:].strip()
+                    
+                    if not args_str:
+                        print("Usage: d <type><id> | <type><id> ... (e.g., d SAT0 | UT1)")
+                        input()
+                    else:
+                        # Разбиваем строку по символу '|'
+                        raw_parts = args_str.split('|')
+                        target_devices = []
+                        valid_input = True
+                        
+                        for part in raw_parts:
+                            clean_part = part.strip()
+                            # Парсинг строки вида "SAT1", "UT10", "GW0"
+                            match = re.match(r'^([A-Z]+)(\d+)$', clean_part)
+                            if match:
+                                target_type = match.group(1)
+                                target_id = int(match.group(2))
+                                target_devices.append((target_type, target_id))
+                            else:
+                                print(f"Invalid device format: '{clean_part}'. Expected 'TypeID' (e.g., SAT0).")
+                                valid_input = False
+                                break
+                        
+                        if valid_input and target_devices:
+                            # Формируем описание для статуса
+                            desc_parts = [f"{t}{i}" for t, i in target_devices]
+                            filter_description = ", ".join(desc_parts)
                             
+                            # Фильтруем
                             filtered_indices = [
                                 i for i, e in enumerate(entries) 
-                                if e.node_type == target_type and e.node_id == target_id
+                                if (e.node_type, e.node_id) in target_devices
                             ]
+                            
                             if filtered_indices:
                                 filter_mode = 'device'
-                                filtered_target_id = target_id # храним для справки
+                                filtered_target_id = len(target_devices) # Просто счетчик для инфо
                                 current_index = 0
                                 search_indices = []
                                 search_term = ""
                             else:
-                                print(f"No events found for Device '{filter_description}'. Press Enter...")
+                                print(f"No events found for devices: {filter_description}. Press Enter...")
                                 input()
+                        elif valid_input:
+                             print("No valid devices provided.")
+                             input()
                         else:
-                            print("Invalid format. Use 'd SAT1' or 'd UT4'. Press Enter...")
                             input()
-                    else:
-                        print("Usage: d <type><id> (e.g., d SAT1)")
-                        input()
 
                 # Навигация по результатам поиска
                 elif user_input.lower() == 'n':
