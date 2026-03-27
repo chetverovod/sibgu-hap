@@ -21,6 +21,7 @@
 import os
 import sys
 import argparse
+import bisect
 
 import cli_logs_parser
 
@@ -55,13 +56,18 @@ def get_color_for_direction(direction):
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def format_entry(entry):
+def format_entry(entry, highlight=False):
     """Форматирует одну запись лога в строку таблицы."""
     time_str = f"{entry.time:.6f}"
     
     event_color = get_color_for_event(entry.event)
     dir_color = get_color_for_direction(entry.direction)
     
+    # Если запись является результатом поиска, инвертируем цвета для подсветки
+    if highlight:
+        event_color = '\033[7m' # Invert background/foreground
+        dir_color = '\033[7m'
+
     # Формирование информации о MAC адресах (если есть)
     mac_info = ""
     if entry.src_mac and entry.dst_mac:
@@ -70,7 +76,6 @@ def format_entry(entry):
         mac_info = f"Src: {entry.src_mac}"
     
     # Форматирование строки с фиксированной шириной колонок для читаемости
-    # Колонки: Time | Event | Node | ID | MAC | Lvl | Dir | PktID | MAC Info
     line = (
         f"{time_str:<10} "
         f"{event_color}{entry.event:<3}{Colors.RESET} "
@@ -112,33 +117,142 @@ def run_display(log_filename, page_size=20):
         print("No valid trace entries found.")
         return
 
+    # Создаем список времен для быстрого поиска (бинарный поиск)
+    entry_times = [e.time for e in entries]
+
     print(f"Loaded {total_entries} entries.")
-    print("Controls: [Enter] - Next Page, [Q] - Quit\n")
-    input("Press Enter to start...")
+    # Удалено ожидание ввода для старта, начинаем сразу
+    # input("Press Enter to start...") 
 
     current_index = 0
+    
+    # Переменные для поиска
+    search_indices = []
+    current_search_pos = -1
+    search_term = ""
 
-    while current_index < total_entries:
+    while True:
         clear_screen()
-        print(f"{Colors.BOLD}Packet Trace Viewer | Page {current_index // page_size + 1}{Colors.RESET}")
+        
+        # Вывод статуса поиска или навигации
+        status_msg = f"CLI Packet Trace Viewer | Page {current_index // page_size + 1}/{(total_entries - 1) // page_size + 1}"
+        if search_indices:
+            status_msg += f" | Search: '{search_term}' [{current_search_pos + 1}/{len(search_indices)}]"
+        
+        print(f"{Colors.BOLD}{status_msg}{Colors.RESET}")
         print_header()
         
         # Вывод страницы
         end_index = min(current_index + page_size, total_entries)
+        
+        # Определяем, какие строки подсветить (если они есть в текущем поиске)
+        current_page_indices = set(range(current_index, end_index))
+        
         for i in range(current_index, end_index):
-            print(format_entry(entries[i]))
+            # Проверяем, является ли текущая строка результатом поиска
+            is_match = False
+            if search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
+                # Подсвечиваем, если текущий индекс совпадает с найденным
+                # ИЛИ если мы просто показываем список, где есть совпадения (опционально)
+                # Здесь подсветим только конкретный найденный элемент, на который мы прыгнули
+                if i == search_indices[current_search_pos]:
+                    is_match = True
+            
+            print(format_entry(entries[i], highlight=is_match))
         
         print(f"\nShowing entries {current_index + 1} - {end_index} of {total_entries}")
-        print("[Enter] Next | [Q] Quit")
+        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [s <mac>] Search | [n/N] Next/Prev Search | [Q] Quit")
 
         # Ожидание ввода пользователя
         try:
-            user_input = input()
+            user_input = input("> ").strip()
+            
             if user_input.lower() == 'q':
                 break
-            current_index += page_size
+            
+            # Навигация по страницам
+            elif not user_input:
+                current_index += page_size
+            elif user_input.lower() == 'b':
+                current_index = max(0, current_index - page_size)
+            
+            # Поиск
+            elif user_input.lower().startswith('s '):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) > 1:
+                    search_term = parts[1].lower()
+                    # Ищем по MAC узла, Source MAC или Dest MAC
+                    search_indices = [
+                        i for i, e in enumerate(entries) 
+                        if search_term in e.mac.lower() or 
+                           (e.src_mac and search_term in e.src_mac.lower()) or 
+                           (e.dst_mac and search_term in e.dst_mac.lower())
+                    ]
+                    current_search_pos = -1
+                    if search_indices:
+                        # Переходим к первому результату
+                        current_search_pos = 0
+                        current_index = search_indices[0]
+                    else:
+                        # Вывод сообщения об ошибке на секунду (эмуляция через print перед очисткой в следующем цикле)
+                        print(f"No matches found for '{search_term}'. Press Enter...")
+                        input() 
+                else:
+                    print("Usage: s <mac_address>")
+                    input()
+
+            # Навигация по результатам поиска
+            elif user_input.lower() == 'n':
+                if search_indices:
+                    if current_search_pos + 1 < len(search_indices):
+                        current_search_pos += 1
+                        current_index = search_indices[current_search_pos]
+                    else:
+                        print("End of search results.")
+                        input()
+                else:
+                    print("No active search. Use 's <mac>' first.")
+                    input()
+            
+            elif user_input == 'N': # Shift-n
+                if search_indices:
+                    if current_search_pos > 0:
+                        current_search_pos -= 1
+                        current_index = search_indices[current_search_pos]
+                    else:
+                        print("Start of search results.")
+                        input()
+                else:
+                    print("No active search. Use 's <mac>' first.")
+                    input()
+
+            # Переход по времени
+            elif user_input.lower().startswith('t '):
+                parts = user_input.split(maxsplit=1)
+                if len(parts) > 1:
+                    try:
+                        target_time = float(parts[1])
+                        # Бинарный поиск для нахождения индекса
+                        idx = bisect.bisect_left(entry_times, target_time)
+                        if idx < total_entries:
+                            current_index = idx
+                        else:
+                            current_index = total_entries - 1 # Переход в конец, если время больше последнего
+                    except ValueError:
+                        print("Invalid time format. Use float (e.g., 1.5)")
+                        input()
+                else:
+                    print("Usage: t <time>")
+                    input()
+
         except (EOFError, KeyboardInterrupt):
             break
+        
+        # Проверка границ
+        if current_index >= total_entries:
+            current_index = total_entries - 1
+        elif current_index < 0:
+            current_index = 0
 
     print(f"\n{Colors.BOLD}End of trace.{Colors.RESET}")
 
