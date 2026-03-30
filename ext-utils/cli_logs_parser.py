@@ -60,9 +60,13 @@ def parse_packet_trace_line(line):
         dst_mac = None
 
         # Если есть дополнительные поля (Source MAC, Dest MAC)
+        # В некоторых форматах логов может быть 9 полей (только Src), но здесь ожидаем 10 (Src Dst)
         if len(parts) >= 10:
             src_mac = parts[8]
             dst_mac = parts[9]
+        elif len(parts) == 9:
+            # Редкий случай, но обрабатываем: если только один MAC, считаем его Source
+            src_mac = parts[8]
 
         return TraceEntry(time, event, node_type, node_id, mac, 
                           level, direction, packet_id, src_mac, dst_mac)
