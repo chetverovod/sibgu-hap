@@ -138,7 +138,7 @@ PrintDeviceIpTable(NodeContainer nodes, std::string role)
 {
     std::cout << std::endl;
     std::cout << "====================================================================================" << std::endl;
-    std::cout << "| Node ID | Role   | Dev ID | Type                   | IP Address                       |" << std::endl;
+    std::cout << "| Node ID | Role | Dev ID | Type                          | IP Address             |" << std::endl;
     std::cout << "====================================================================================" << std::endl;
 
     for (uint32_t i = 0; i < nodes.GetN(); ++i)
@@ -176,10 +176,10 @@ PrintDeviceIpTable(NodeContainer nodes, std::string role)
 
             // Печатаем строку таблицы с новой колонкой Role
             std::cout << "| " << std::setw(7) << node->GetId() 
-                      << " | " << std::setw(6) << role
+                      << " | " << std::setw(4) << role
                       << " | " << std::setw(6) << j
-                      << " | " << std::setw(22) << typeName
-                      << " | " << std::setw(32) << ipAddr << " |" << std::endl;
+                      << " | " << std::setw(29) << typeName
+                      << " | " << std::setw(22) << ipAddr << " |" << std::endl;
         }
     }
     std::cout << "====================================================================================" << std::endl;
@@ -256,7 +256,8 @@ EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, std::string 
                 std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
                 Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_EN10MB);
 
-                dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapSniffSink, file));
+                //dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapSniffSink, file));
+                //dev->TraceConnectWithoutContext("MacTx", MakeBoundCallback(&PcapSniffSink, file));
                 dev->TraceConnectWithoutContext("PromiscSniffer", MakeBoundCallback(&PcapSniffSink, file));
                 NS_LOG_UNCOND("PCAP (CsmaNetDevice): " << fullPath);
                 continue;
