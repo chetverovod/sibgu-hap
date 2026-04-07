@@ -34,6 +34,8 @@
 #include "ns3/satellite-enums.h"
 #include <iomanip> 
 #include <sstream> 
+#include <tuple>
+#include <vector>
 
 using namespace ns3;
 
@@ -134,13 +136,10 @@ PcapSniffSink(Ptr<PcapFileWrapper> file, Ptr<const Packet> packet)
 // Функция для печати таблицы IP-адресов (с указанием роли узла: GW, UT, SAT)
 // ============================================================================
 static void
-PrintDeviceIpTable(NodeContainer nodes, std::string role)
+CollectDeviceIpRows(NodeContainer nodes,
+                    const std::string& role,
+                    std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>>& rows)
 {
-    std::cout << std::endl;
-    std::cout << "====================================================================================" << std::endl;
-    std::cout << "| Node ID | Role | Dev ID | Type                          | IP Address             |" << std::endl;
-    std::cout << "====================================================================================" << std::endl;
-
     for (uint32_t i = 0; i < nodes.GetN(); ++i)
     {
         Ptr<Node> node = nodes.Get(i);
@@ -174,13 +173,25 @@ PrintDeviceIpTable(NodeContainer nodes, std::string role)
                 }
             }
 
-            // Печатаем строку таблицы с новой колонкой Role
-            std::cout << "| " << std::setw(7) << node->GetId() 
-                      << " | " << std::setw(4) << role
-                      << " | " << std::setw(6) << j
-                      << " | " << std::setw(29) << typeName
-                      << " | " << std::setw(22) << ipAddr << " |" << std::endl;
+            rows.emplace_back(node->GetId(), role, j, typeName, ipAddr);
         }
+    }
+}
+
+static void
+PrintDeviceIpTable(const std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>>& rows)
+{
+    std::cout << std::endl;
+    std::cout << "====================================================================================" << std::endl;
+    std::cout << "| Node ID | Role | Dev ID | Type                          | IP Address             |" << std::endl;
+    std::cout << "====================================================================================" << std::endl;
+    for (const auto& row : rows)
+    {
+        std::cout << "| " << std::setw(7) << std::get<0>(row)
+                  << " | " << std::setw(4) << std::get<1>(row)
+                  << " | " << std::setw(6) << std::get<2>(row)
+                  << " | " << std::setw(29) << std::get<3>(row)
+                  << " | " << std::setw(22) << std::get<4>(row) << " |" << std::endl;
     }
     std::cout << "====================================================================================" << std::endl;
     std::cout << std::endl;
@@ -192,9 +203,6 @@ PrintDeviceIpTable(NodeContainer nodes, std::string role)
 void
 EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, std::string outputDir, std::string role)
 {
-    // 1. Печатаем таблицу, передавая роль (GW, UT или SAT)
-    PrintDeviceIpTable(nodes, role);
-
     PcapHelper pcapHelper;
 
     for (uint32_t i = 0; i < nodes.GetN(); ++i)
@@ -266,7 +274,54 @@ EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, std::string 
             // 5) PointToPointIslNetDevice
             if (typeName == "ns3::PointToPointIslNetDevice")
             {
-                NS_LOG_UNCOND("SKIP (PointToPointIslNetDevice): " << devLabel);
+                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
+                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_RAW);
+
+                bool connected = false;
+
+                // Пробуем типичные packet-trace источники для point-to-point классов.
+                connected = dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("Rx", MakeBoundCallback(&PcapRxSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("MacTx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("MacRx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("Sniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("PromiscSniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+
+                if (connected)
+                {
+                    NS_LOG_UNCOND("PCAP (PointToPointIslNetDevice): " << fullPath);
+                }
+                else
+                {
+                    NS_LOG_UNCOND("SKIP (PointToPointIslNetDevice,no-trace): " << devLabel);
+                }
+                continue;
+            }
+
+            // 6) SatSimpleNetDevice
+            if (typeName == "ns3::SatSimpleNetDevice")
+            {
+                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
+                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_RAW);
+
+                bool connected = false;
+
+                // Пробуем типичные packet-trace источники.
+                connected = dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("Rx", MakeBoundCallback(&PcapRxSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("MacTx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("MacRx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("Sniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+                connected = dev->TraceConnectWithoutContext("PromiscSniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
+
+                if (connected)
+                {
+                    NS_LOG_UNCOND("PCAP (SatSimpleNetDevice): " << fullPath);
+                }
+                else
+                {
+                    NS_LOG_UNCOND("SKIP (SatSimpleNetDevice,no-trace): " << devLabel);
+                }
                 continue;
             }
 
@@ -319,7 +374,16 @@ main(int argc, char* argv[])
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
 
     // ========================================================================
-    // PCAP для всех нод (с указанием роли: GW, SAT, UT)
+    // Единая таблица соответствий устройств и IP адресов для всех ролей
+    // ========================================================================
+    std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>> ipRows;
+    CollectDeviceIpRows(topology->GetGwNodes(), "GW", ipRows);
+    CollectDeviceIpRows(topology->GetOrbiterNodes(), "SAT", ipRows);
+    CollectDeviceIpRows(topology->GetUtNodes(), "UT", ipRows);
+    PrintDeviceIpTable(ipRows);
+
+    // ========================================================================
+    // PCAP для всех нод
     // ========================================================================
     EnablePcapForNodeContainer(topology->GetGwNodes(), "sat-handover-gw", outputDir, "GW");
     EnablePcapForNodeContainer(topology->GetOrbiterNodes(), "sat-handover-orbiter", outputDir, "SAT");
