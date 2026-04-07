@@ -73,28 +73,24 @@ def get_key():
     """
     Считывает одну клавишу с клавиатуры.
     Поддерживает специальные клавиши (PageUp, PageDown, стрелки).
-    Исправлены ошибки с кодами клавиш для Windows и Linux.
     """
     if os.name == 'nt':
         # --- Windows ---
-        # msvcrt.kbhit() возвращает True, если есть нажатие в буфере
         if msvcrt.kbhit():
             ch = msvcrt.getch()
-            # Специальные клавиши (функциональные, стрелки) возвращают 0x00 или 0xE0
             if ch in (b'\x00', b'\xe0'):
                 ch2 = msvcrt.getch()
-                # Коды скан-клавиш (Scan Codes)
-                if ch2 == b'H': return 'UP'        # Стрелка вверх
-                if ch2 == b'P': return 'DOWN'      # Стрелка вниз
-                if ch2 == b'K': return 'LEFT'      # Стрелка влево
-                if ch2 == b'M': return 'RIGHT'     # Стрелка вправо
-                if ch2 == b'I': return 'PAGE_UP'   # Page Up (код 0x49 = 'I')
-                if ch2 == b'Q': return 'PAGE_DOWN' # Page Down (код 0x51 = 'Q')
-                if ch2 == b'S': return 'DEL'       # Delete
+                if ch2 == b'H': return 'UP'
+                if ch2 == b'P': return 'DOWN'
+                if ch2 == b'K': return 'LEFT'
+                if ch2 == b'M': return 'RIGHT'
+                if ch2 == b'I': return 'PAGE_UP'
+                if ch2 == b'Q': return 'PAGE_DOWN'
+                if ch2 == b'S': return 'DEL'
                 return ch2.decode('utf-8', errors='ignore')
             elif ch == b'\r':
                 return 'ENTER'
-            elif ch == b'\x03': # Ctrl+C
+            elif ch == b'\x03': 
                 raise KeyboardInterrupt
             else:
                 return ch.decode('utf-8', errors='ignore')
@@ -106,33 +102,20 @@ def get_key():
         try:
             tty.setraw(sys.stdin.fileno())
             ch = sys.stdin.read(1)
-            
-            # Escape последовательности начинаются с \x1b (ESC)
             if ch == '\x1b':
-                # Читаем следующие 2 символа
                 seq = sys.stdin.read(2)
-                
-                # Стрелки: [A, [B, [C, [D
                 if seq == '[A': return 'UP'
                 if seq == '[B': return 'DOWN'
                 if seq == '[D': return 'LEFT'
                 if seq == '[C': return 'RIGHT'
-                
-                # PageUp / PageDown: [5~, [6~
-                # После '[5' идет еще один символ '~'
                 if seq == '[5': 
-                    # Читаем последний символ последовательности
                     if sys.stdin.read(1) == '~': return 'PAGE_UP'
-                
                 if seq == '[6': 
                     if sys.stdin.read(1) == '~': return 'PAGE_DOWN'
-                
-                # Если это что-то другое, просто возвращаем ESC
                 return 'ESC'
-            
             elif ch == '\r' or ch == '\n':
                 return 'ENTER'
-            elif ch == '\x03': # Ctrl+C
+            elif ch == '\x03': 
                 raise KeyboardInterrupt
             else:
                 return ch
@@ -140,14 +123,12 @@ def get_key():
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 def get_unique_devices(entries):
-    """Собирает уникальные устройства из лога."""
     devices = set()
     for e in entries:
         devices.add((e.node_type, e.node_id))
     return sorted(list(devices), key=lambda x: (x[0], x[1]))
 
 def show_device_list(devices):
-    """Отображает список устройств на отдельном экране."""
     clear_screen()
     print(f"{Colors.BOLD}List of Devices Found in Log:{Colors.RESET}")
     print("-" * 30)
@@ -162,7 +143,6 @@ def show_device_list(devices):
     input()
 
 def build_mac_map(entries):
-    """Строит словарь MAC адрес -> (Type, ID)."""
     mac_map = {}
     for e in entries:
         if e.mac:
@@ -172,7 +152,6 @@ def build_mac_map(entries):
     return mac_map
 
 def show_device_interactions(entries, mac_map, target_type, target_id):
-    """Показывает список устройств, с которыми взаимодействовал указанный узел."""
     peers = set()
     broadcast_found = False
     unknown_found = False
@@ -215,7 +194,6 @@ def show_device_interactions(entries, mac_map, target_type, target_id):
     input()
 
 def format_entry(entry, mac_map, highlight=False):
-    """Форматирует одну запись лога в строку таблицы."""
     time_str = f"{entry.time:.6f}"
     event_color = get_color_for_event(entry.event)
     dir_color = get_color_for_direction(entry.direction)
@@ -257,7 +235,6 @@ def format_entry(entry, mac_map, highlight=False):
     return line
 
 def print_header():
-    """Выводит заголовок таблицы."""
     header = (
         f"{'Time':<10} "
         f"{'Evt':<3} "
@@ -347,18 +324,19 @@ def run_display(log_filename, page_size=20):
         
         print(f"\nShowing entries {display_start + 1} - {display_end} of {total_viewable}")
         
+        # Форматирование справки
         print(f"{Colors.BOLD}Controls:{Colors.RESET} [PgUp/PgDn] Scroll | [Enter] Next | [b] Back | [t] Jump | [l] List | [i] Interact |")
-        print(f"{Colors.BOLD}         {Colors.RESET} [x] Filter Pair | [Q] Quit")        
+        print(f"{Colors.BOLD}         {Colors.RESET} [x] Filter Pair | [n/N] Search Nav | [Q] Quit")
+        
         if filter_mode is not None:
             print(f"{Colors.BOLD}         {Colors.RESET} [c] Clear Filter")
         else:
-            print(f"{Colors.BOLD}         {Colors.RESET} [s] Search MAC  | [p] Search Pkt  | [f] Filter Pkt      | [d] Filter Devs |")
-            print(f"{Colors.BOLD}         {Colors.RESET} [n/N] Next/Prev Search")
+            print(f"{Colors.BOLD}         {Colors.RESET} [s] Search MAC  | [p] Search Pkt  | [f] Filter Pkt      | [d] Filter Devs")
+
         try:
-            # Гибридный ввод
             key = get_key()
             
-            # Обработка навигационных клавиш (одиночные действия)
+            # Мгновенные действия (без Enter)
             if key == 'PAGE_DOWN' or key == 'ENTER':
                 current_index += page_size
                 continue
@@ -389,18 +367,36 @@ def run_display(log_filename, page_size=20):
                 devices = get_unique_devices(entries)
                 show_device_list(devices)
                 continue
+            elif key == 'n' or key == 'N':
+                # Навигация по результатам поиска (мгновенная)
+                if filter_mode is None and search_indices:
+                    if key == 'n': # Next
+                        if current_search_pos + 1 < len(search_indices):
+                            current_search_pos += 1
+                            current_index = search_indices[current_search_pos]
+                        else:
+                            print("End of search results. Press Enter...")
+                            input()
+                    else: # Prev ('N')
+                        if current_search_pos > 0:
+                            current_search_pos -= 1
+                            current_index = search_indices[current_search_pos]
+                        else:
+                            print("Start of search results. Press Enter...")
+                            input()
+                else:
+                    print("No active search. Use 's' or 'p' first. Press Enter...")
+                    input()
+                continue
 
             # Если клавиша требует аргументов, используем обычный input
-            # Но сначала выведем нажатую клавишу, так как get_key ее "съел"
             if key is not None and len(key) == 1:
                 print(f"> {key}", end='', flush=True)
                 rest = input("")
                 user_input = (key + rest).strip()
             else:
-                # На всякий случай, если что-то пошло не так (или нажат неопознанный спец. символ)
                 user_input = input("> ").strip()
 
-            # --- Обработка команд с аргументами ---
             if filter_mode is None:
                 # Фильтрация пары
                 if user_input.lower().startswith('x '):
@@ -438,18 +434,24 @@ def run_display(log_filename, page_size=20):
                                 filter_description = f"{dev1[0]}{dev1[1]} - {dev2[0]}{dev2[1]}"
                                 target_pair = {dev1, dev2}
                                 filtered_indices = []
-                                for i, e in enumerate(entries):
+                                for idx, e in enumerate(entries):
                                     src_dev = mac_to_device_map.get(e.src_mac)
                                     dst_dev = mac_to_device_map.get(e.dst_mac)
                                     if src_dev and dst_dev and {src_dev, dst_dev} == target_pair:
-                                        filtered_indices.append(i)
+                                        filtered_indices.append(idx)
                                 if filtered_indices:
                                     filter_mode = 'pair'; current_index = 0; search_indices = []; search_term = ""
                                 else: print(f"No interaction found. Press Enter..."); input()
                             else: print("Invalid device format. Use TypeID (e.g., SAT0)."); input()
 
-                elif user_input.lower().startswith('i '):
-                    args_str = user_input[2:].strip()
+                # Взаимодействия
+                elif user_input.lower().startswith('i'):
+                    args_str = user_input[1:].strip()
+                    if not args_str:
+                        print("Usage: i <type><id> or i <type> <id>")
+                        input()
+                        continue
+
                     parts = args_str.split()
                     found = False
                     t_type, t_id = None, None
@@ -460,6 +462,7 @@ def run_display(log_filename, page_size=20):
                     elif len(parts) == 1:
                         match = re.match(r'^([A-Z]+)(\d+)$', parts[0])
                         if match: t_type = match.group(1); t_id = int(match.group(2)); found = True
+                    
                     if found: show_device_interactions(entries, mac_to_device_map, t_type, t_id)
                     else: print("Usage: i <type><id> or i <type> <id>"); input()
 
@@ -511,16 +514,6 @@ def run_display(log_filename, page_size=20):
                             else: print(f"No events found. Press Enter..."); input()
                         elif valid_input: print("No valid devices."); input()
                         else: input()
-                elif user_input.lower() == 'n':
-                    if search_indices:
-                        if current_search_pos + 1 < len(search_indices): current_search_pos += 1; current_index = search_indices[current_search_pos]
-                        else: print("End of search results."); input()
-                    else: print("No active search."); input()
-                elif user_input == 'N':
-                    if search_indices:
-                        if current_search_pos > 0: current_search_pos -= 1; current_index = search_indices[current_search_pos]
-                        else: print("Start of search results."); input()
-                    else: print("No active search."); input()
                 elif user_input.lower().startswith('t '):
                     parts = user_input.split(maxsplit=1)
                     if len(parts) > 1:
