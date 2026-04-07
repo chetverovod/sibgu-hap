@@ -88,3 +88,13 @@ build_lib_example(
                       
 )
 
+build_lib_example(
+    NAME sat-handover-hap
+    SOURCE_FILES sat-handover-hap.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libsatellite}
+                       ${libflow-monitor}
+)
+
