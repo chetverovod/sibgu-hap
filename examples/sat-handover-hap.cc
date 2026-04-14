@@ -276,6 +276,29 @@ PrintDeviceIpTable(const std::vector<std::tuple<uint32_t, std::string, uint32_t,
     std::cout << std::endl;
 }
 
+static void
+SaveDeviceIpTableToFile(
+    const std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>>& rows,
+    const std::string& outputPath)
+{
+    std::ofstream out(outputPath, std::ios::out | std::ios::trunc);
+    NS_ABORT_MSG_UNLESS(out.is_open(), "Cannot open devices table output file: " << outputPath);
+
+    // Keep syntax close to scatter/stat files: metadata lines start with '%'.
+    out << "% output_type: 'OUTPUT_TYPE_TABLE'" << std::endl;
+    out << "% source: 'sat-handover-hap'" << std::endl;
+    out << "% count: " << rows.size() << std::endl;
+    out << "% node_id role dev_id device_type ip_address" << std::endl;
+    for (const auto& row : rows)
+    {
+        out << std::get<0>(row) << " "
+            << std::get<1>(row) << " "
+            << std::get<2>(row) << " "
+            << std::get<3>(row) << " "
+            << std::get<4>(row) << std::endl;
+    }
+}
+
 // ============================================================================
 // EnablePcapForNodeContainer
 // ============================================================================
@@ -493,6 +516,7 @@ main(int argc, char* argv[])
     CollectDeviceIpRows(topology->GetOrbiterNodes(), "SAT", ipRows);
     CollectDeviceIpRows(topology->GetUtNodes(), "UT", ipRows);
     PrintDeviceIpTable(ipRows);
+    SaveDeviceIpTableToFile(ipRows, SystemPath::Append(outputDir, "DevicesTable.txt"));
 
     // ========================================================================
     // PCAP для всех нод

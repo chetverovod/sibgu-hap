@@ -32,6 +32,14 @@ class StatFile:
     rows: List[Tuple[float, float]]
 
 
+@dataclass
+class DevicesTable:
+    path: Path
+    metadata: Dict[str, str]
+    header: List[str]
+    rows: List[List[str]]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -133,11 +141,52 @@ def find_xml_files(results_dir: Path) -> List[Path]:
     return sorted(results_dir.glob("*.xml"))
 
 
+def parse_devices_table(results_dir: Path) -> Optional[DevicesTable]:
+    path = results_dir / "DevicesTable.txt"
+    if not path.exists() or not path.is_file():
+        return None
+
+    metadata: Dict[str, str] = {}
+    header: List[str] = []
+    rows: List[List[str]] = []
+
+    with path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if line.startswith("%"):
+                parsed = parse_metadata_line(line)
+                if parsed:
+                    key, value = parsed
+                    metadata[key] = value
+                else:
+                    # Header line like: % node_id role dev_id device_type ip_address
+                    payload = line[1:].strip()
+                    if payload and ":" not in payload:
+                        header = payload.split()
+                continue
+
+            parts = line.split()
+            if parts:
+                rows.append(parts)
+
+    if not rows:
+        return None
+
+    if not header:
+        header = ["node_id", "role", "dev_id", "device_type", "ip_address"]
+
+    return DevicesTable(path=path, metadata=metadata, header=header, rows=rows)
+
+
 def render_report(
     output_pdf: Path,
     results_dir: Path,
     stat_files: List[StatFile],
     xml_files: List[Path],
+    devices_table: Optional[DevicesTable],
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -159,6 +208,12 @@ def render_report(
         fig.text(0.05, 0.67, f"XML attributes file(s): {xml_text}", fontsize=11)
         fig.text(
             0.05,
+            0.62,
+            f"Devices table file: {devices_table.path.name if devices_table else 'Not found'}",
+            fontsize=11,
+        )
+        fig.text(
+            0.05,
             0.58,
             "Each following page contains one graph and the source filename.",
             fontsize=10,
@@ -172,6 +227,52 @@ def render_report(
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         pdf.savefig(fig)
         plt.close(fig)
+
+        if devices_table is not None:
+            rows_per_page = 28
+            for chunk_start in range(0, len(devices_table.rows), rows_per_page):
+                chunk = devices_table.rows[chunk_start:chunk_start + rows_per_page]
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                ax.axis("off")
+                title_suffix = ""
+                if len(devices_table.rows) > rows_per_page:
+                    page_idx = (chunk_start // rows_per_page) + 1
+                    page_cnt = (len(devices_table.rows) + rows_per_page - 1) // rows_per_page
+                    title_suffix = f" (page {page_idx}/{page_cnt})"
+                ax.set_title(
+                    f"Devices IP Table from {devices_table.path.name}{title_suffix}",
+                    fontsize=13,
+                    pad=12,
+                )
+
+                table = ax.table(
+                    cellText=chunk,
+                    colLabels=devices_table.header,
+                    bbox=[0.0, 0.08, 1.0, 0.78],
+                    cellLoc="left",
+                )
+                table.auto_set_font_size(False)
+                table.set_fontsize(8)
+                table.scale(1, 1.4)
+                for col_idx in range(len(devices_table.header)):
+                    table[(0, col_idx)].set_text_props(weight="bold")
+
+                meta_lines = [f"Source: {devices_table.path.name}"]
+                if devices_table.metadata:
+                    meta_lines.extend(
+                        [f"{k}: {v}" for k, v in sorted(devices_table.metadata.items())]
+                    )
+                fig.text(
+                    0.01,
+                    0.01,
+                    "\n".join(meta_lines),
+                    fontsize=8.5,
+                    va="bottom",
+                    family="monospace",
+                )
+                fig.tight_layout(rect=(0, 0.06, 1, 0.96))
+                pdf.savefig(fig)
+                plt.close(fig)
 
         for stat in stat_files:
             x_vals = [x for x, _ in stat.rows]
@@ -215,13 +316,14 @@ def main() -> None:
 
     stat_files = collect_stat_files(results_dir)
     xml_files = find_xml_files(results_dir)
+    devices_table = parse_devices_table(results_dir)
 
-    if not stat_files:
+    if not stat_files and devices_table is None:
         raise SystemExit(
-            "No non-empty stat-*.txt files were found (or filenames do not match expected pattern)."
+            "No non-empty stat-*.txt files found and DevicesTable.txt is missing/empty."
         )
 
-    render_report(output_pdf, results_dir, stat_files, xml_files)
+    render_report(output_pdf, results_dir, stat_files, xml_files, devices_table)
     print(f"Report generated: {output_pdf}")
 
 
