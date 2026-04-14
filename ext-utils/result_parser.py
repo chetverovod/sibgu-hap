@@ -18,6 +18,14 @@ FILE_NAME_RE = re.compile(
     r"^stat-(global|per-gw|per-ut)-([^-]+)-(.+)-([^-]+)-(scatter|scalar)-(-?\d+)\.txt$"
 )
 
+# A4 landscape margins:
+# - left: 20 mm
+# - top/right/bottom: 5 mm
+PAGE_LEFT = 20.0 / 297.0
+PAGE_RIGHT = 1.0 - (5.0 / 297.0)
+PAGE_TOP = 1.0 - (5.0 / 210.0)
+PAGE_BOTTOM = 5.0 / 210.0
+
 
 @dataclass
 class StatFile:
@@ -346,8 +354,8 @@ def render_report(
             nonlocal page_number
             page_number += 1
             fig.text(
-                0.985,
-                0.012,
+                PAGE_RIGHT,
+                PAGE_BOTTOM,
                 f"Page {page_number}",
                 ha="right",
                 va="bottom",
@@ -376,6 +384,7 @@ def render_report(
             body_fontsize: float,
             header_fontsize: float,
             chars_per_col: List[int],
+            col_widths: Optional[List[float]] = None,
         ) -> None:
             ax.axis("off")
             ax.set_title(title, fontsize=13, pad=12)
@@ -399,11 +408,21 @@ def render_report(
                 row_heights = [h * scale for h in row_heights]
                 table_height = max_table_height
 
-            table_y = 0.86 - table_height
+            table_top = PAGE_TOP - 0.055
+            table_bottom_limit = PAGE_BOTTOM + 0.05
+            max_by_margins = max(0.2, table_top - table_bottom_limit)
+            if table_height > max_by_margins:
+                scale = max_by_margins / table_height
+                header_h *= scale
+                row_heights = [h * scale for h in row_heights]
+                table_height = max_by_margins
+
+            table_y = table_top - table_height
             table = ax.table(
                 cellText=rows,
                 colLabels=header,
-                bbox=[0.0, table_y, 1.0, table_height],
+                bbox=[PAGE_LEFT, table_y, PAGE_RIGHT - PAGE_LEFT, table_height],
+                colWidths=col_widths,
                 cellLoc="left",
             )
             table.auto_set_font_size(False)
@@ -421,50 +440,50 @@ def render_report(
                     table[(row_idx, col_idx)].set_height(row_h)
 
             fig.text(
-                0.01,
-                0.01,
+                PAGE_LEFT,
+                PAGE_BOTTOM + 0.003,
                 source_text,
                 fontsize=8.5,
                 va="bottom",
                 family="monospace",
             )
-            fig.tight_layout(rect=(0, 0.06, 1, 0.96))
+            fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.035, PAGE_RIGHT, PAGE_TOP))
             save_page(fig)
 
         # Cover page
         fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
-        fig.suptitle("Simulation Results Report", fontsize=18, fontweight="bold", y=0.95)
+        fig.suptitle("Simulation Results Report", fontsize=18, fontweight="bold", y=PAGE_TOP - 0.01)
         now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         xml_text = ", ".join(p.name for p in xml_files) if xml_files else "Not found"
-        fig.text(0.05, 0.82, f"Generated at: {now}", fontsize=11)
-        fig.text(0.05, 0.77, f"Results directory: {results_dir}", fontsize=11)
-        fig.text(0.05, 0.72, f"Statistics files included: {len(stat_files)}", fontsize=11)
-        fig.text(0.05, 0.67, f"XML attributes file(s): {xml_text}", fontsize=11)
+        fig.text(PAGE_LEFT, PAGE_TOP - 0.13, f"Generated at: {now}", fontsize=11)
+        fig.text(PAGE_LEFT, PAGE_TOP - 0.18, f"Results directory: {results_dir}", fontsize=11)
+        fig.text(PAGE_LEFT, PAGE_TOP - 0.23, f"Statistics files included: {len(stat_files)}", fontsize=11)
+        fig.text(PAGE_LEFT, PAGE_TOP - 0.28, f"XML attributes file(s): {xml_text}", fontsize=11)
         fig.text(
-            0.05,
-            0.62,
+            PAGE_LEFT,
+            PAGE_TOP - 0.33,
             f"Devices table file: {devices_table.path.name if devices_table else 'Not found'}",
             fontsize=11,
         )
         fig.text(
-            0.05,
-            0.58,
+            PAGE_LEFT,
+            PAGE_TOP - 0.38,
             f"Packet trace file: {packet_trace_table.path.name if packet_trace_table else 'Not found'}",
             fontsize=11,
         )
         fig.text(
-            0.05,
-            0.53,
+            PAGE_LEFT,
+            PAGE_TOP - 0.45,
             "Each following page contains one graph and the source filename.",
             fontsize=10,
         )
         fig.text(
-            0.05,
-            0.49,
+            PAGE_LEFT,
+            PAGE_TOP - 0.49,
             "Files without data rows are skipped automatically.",
             fontsize=10,
         )
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+        fig.subplots_adjust(left=PAGE_LEFT, right=PAGE_RIGHT, top=PAGE_TOP, bottom=PAGE_BOTTOM)
         save_page(fig)
 
         if devices_table is not None:
@@ -498,6 +517,7 @@ def render_report(
                     body_fontsize=8.0,
                     header_fontsize=8.3,
                     chars_per_col=[5, 8, 6, 7, 24, 20],
+                    col_widths=[0.045, 0.075, 0.0525, 0.0525, 0.195, 0.1925],
                 )
 
         if packet_trace_table is not None:
@@ -525,6 +545,7 @@ def render_report(
                     body_fontsize=7.0,
                     header_fontsize=7.3,
                     chars_per_col=[5, 10, 8, 17, 6, 6, 7, 7, 7, 7, 7, 7, 6, 6],
+                    col_widths=[0.03, 0.066, 0.0675, 0.126, 0.055, 0.055, 0.065, 0.065, 0.065, 0.065, 0.065, 0.065, 0.055, 0.055],
                 )
 
         for stat in stat_files:
@@ -546,14 +567,14 @@ def render_report(
                 meta_lines.extend([f"{k}: {v}" for k, v in sorted(stat.metadata.items())])
 
             fig.text(
-                0.01,
-                0.01,
+                PAGE_LEFT,
+                PAGE_BOTTOM + 0.003,
                 "\n".join(meta_lines),
                 fontsize=9,
                 va="bottom",
                 family="monospace",
             )
-            fig.tight_layout(rect=(0, 0.08, 1, 0.96))
+            fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
             save_page(fig)
 
 
