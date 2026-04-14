@@ -42,6 +42,9 @@
 
 using namespace ns3;
 
+bool enablePcap = false;
+bool enableHexDump = false;
+
 NS_LOG_COMPONENT_DEFINE("sat-handover-hap");
 
 static std::set<uint32_t>
@@ -277,7 +280,8 @@ PrintDeviceIpTable(const std::vector<std::tuple<uint32_t, std::string, uint32_t,
 // EnablePcapForNodeContainer
 // ============================================================================
 void
-EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, std::string outputDir, std::string role)
+EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, 
+    std::string outputDir, std::string role)
 {
     PcapHelper pcapHelper;
 
@@ -309,13 +313,15 @@ EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, std::string 
                 orbDev->TraceConnectWithoutContext("RxFeeder", MakeBoundCallback(&PcapRxSink, file));
                 orbDev->TraceConnectWithoutContext("RxUser", MakeBoundCallback(&PcapRxSink, file));
 
-                /*
                 // Отключаем hex-dump для RxFeeder и RxUser чтобы сэкономить память
                 // Это может быть полезно для больших сетей или длительных симуляций
-                orbDev->TraceConnectWithoutContext("Tx", MakeCallback(&HexDumpTx));
-                orbDev->TraceConnectWithoutContext("RxFeeder", MakeCallback(&HexDumpRx));
-                orbDev->TraceConnectWithoutContext("RxUser", MakeCallback(&HexDumpRx));
-                */
+                if (enableHexDump)
+                {
+                    orbDev->TraceConnectWithoutContext("Tx", MakeCallback(&HexDumpTx));
+                    orbDev->TraceConnectWithoutContext("RxFeeder", MakeCallback(&HexDumpRx));
+                    orbDev->TraceConnectWithoutContext("RxUser", MakeCallback(&HexDumpRx));
+                }
+                
                 NS_LOG_UNCOND("PCAP (SatOrbiterNetDevice): " << fullPath);
                 continue;
             }
@@ -329,10 +335,11 @@ EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, std::string 
 
                 satDev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file));
                 satDev->TraceConnectWithoutContext("Rx", MakeBoundCallback(&PcapRxSink, file));
-
+                if (enableHexDump)
+                {
                 satDev->TraceConnectWithoutContext("Tx", MakeCallback(&HexDumpTx));
                 satDev->TraceConnectWithoutContext("Rx", MakeCallback(&HexDumpRx));
-
+                }
                 NS_LOG_UNCOND("PCAP (SatNetDevice): " << fullPath);
                 continue;
             }
@@ -419,8 +426,8 @@ main(int argc, char* argv[])
                        EnumValue(SatEnums::REGENERATION_NETWORK));
     Config::SetDefault("ns3::SatConf::ReturnLinkRegenerationMode",
                        EnumValue(SatEnums::REGENERATION_NETWORK));
-    //Config::SetDefault("ns3::SatOrbiterFeederPhy::QueueSize", UintegerValue(100000));
-    Config::SetDefault("ns3::SatOrbiterFeederPhy::QueueSize", UintegerValue(5000));
+    
+    Config::SetDefault("ns3::SatOrbiterFeederPhy::QueueSize", UintegerValue(100000));
     Config::SetDefault("ns3::SatHelper::HandoversEnabled", BooleanValue(true));
     Config::SetDefault("ns3::SatHandoverModule::NumberClosestSats", UintegerValue(3));
     Config::SetDefault("ns3::SatGwMac::DisableSchedulingIfNoDeviceConnected", BooleanValue(true));
@@ -429,21 +436,36 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(true));
 
 
-    float trafficDuration = 2.0; // seconds
-    std::string simulationName = "sat-handover-hap";
+    float simulationDuration = 2.0; // seconds
     std::string scenarioName = "constellation-leo-3-satellites-hap";
+    uint32_t packetSize = 512; // Packet size in bytes
+    float interval = 100.0; // Time interval between CBR packets in milliseconds
+    
+
+    // Declare command line arguments
+    CommandLine cmd;
+    cmd.AddValue("packetSize", "Size of CBR packets in bytes", packetSize);
+    cmd.AddValue("interval", "Time interval between CBR packets, in milliseconds", interval);
+    cmd.AddValue("scenarioName", "Scenario name", scenarioName);
+    cmd.AddValue("simulationDuration", "Simulation duration, in seconds", simulationDuration);
+    cmd.AddValue("enablePcap", "Enable PCAP", enablePcap);
+    cmd.AddValue("enableHexDump", "Enable Hex-Dump", enableHexDump);
+
+    std::string simulationName = "sat-handover-hap";
     Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>(simulationName);
-    simulationHelper->SetSimulationTime(Seconds(trafficDuration));
+    simulationHelper->AddDefaultUiArguments(cmd); // Adds default UI arguments (simulation time, etc.)
+    cmd.Parse(argc, argv); // Parses command-line arguments  
+    simulationHelper->SetSimulationTime(Seconds(simulationDuration));
     uint32_t utUsers = 1;
     simulationHelper->SetGwUserCount(utUsers);
     simulationHelper->SetUserCountPerUt(utUsers);
 
     std::set<uint32_t> beamSetAll = {1,  2,  3,
-                                    // 4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
-                                    // 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
-                                    // 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
-                                    // 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
-                                    // 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72
+                                     4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
+                                     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                                     31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+                                     46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+                                     61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72
                                    };
     simulationHelper->SetBeamSet(beamSetAll);
     
@@ -452,7 +474,6 @@ main(int argc, char* argv[])
     // - satId 2 uses traced mobility from positions/sat_traces.txt
     simulationHelper->LoadScenario(scenarioName);
 
-    //simulationHelper->LoadScenario("constellation-leo-2-satellites");
     simulationHelper->CreateSatScenario(SatHelper::NONE);
     std::string dataPath = Singleton<SatEnvVariables>::Get()->GetDataPath();
     std::string outputDir = SystemPath::Append(dataPath, "sims/" + simulationName);
@@ -466,7 +487,8 @@ main(int argc, char* argv[])
     // ========================================================================
     // Единая таблица соответствий устройств и IP адресов для всех ролей
     // ========================================================================
-    std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>> ipRows;
+    std::vector<std::tuple<uint32_t, std::string, uint32_t,
+                std::string, std::string>> ipRows;
     CollectDeviceIpRows(topology->GetGwNodes(), "GW", ipRows);
     CollectDeviceIpRows(topology->GetOrbiterNodes(), "SAT", ipRows);
     CollectDeviceIpRows(topology->GetUtNodes(), "UT", ipRows);
@@ -477,24 +499,32 @@ main(int argc, char* argv[])
     // ========================================================================
    
     // PCAP for all nodes
-    EnablePcapForNodeContainer(topology->GetGwNodes(), "sat-handover-gw", outputDir, "GW");
-    EnablePcapForNodeContainer(topology->GetOrbiterNodes(), "sat-handover-orbiter", outputDir, "SAT");
-    EnablePcapForNodeContainer(topology->GetUtNodes(), "sat-handover-ut", outputDir, "UT");
+    if (enablePcap)
+    {
+    EnablePcapForNodeContainer(topology->GetGwNodes(), "sat-handover-gw", 
+    outputDir, "GW");
+    EnablePcapForNodeContainer(topology->GetOrbiterNodes(), "sat-handover-orbiter",
+    outputDir, "SAT");
+    EnablePcapForNodeContainer(topology->GetUtNodes(), "sat-handover-ut",
+    outputDir, "UT");
+    }
 
     // ========================================================================
     // Traffic
     // ========================================================================
     simulationHelper->GetTrafficHelper()->AddCbrTraffic(
-        SatTrafficHelper::FWD_LINK, SatTrafficHelper::UDP, MilliSeconds(100), 512,
+        SatTrafficHelper::FWD_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
+        packetSize,
         NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
         Singleton<SatTopology>::Get()->GetUtUserNodes(),
-        Seconds(1.0), Seconds(trafficDuration), Seconds(0));
+        Seconds(1.0), Seconds(simulationDuration), Seconds(0));
 
     simulationHelper->GetTrafficHelper()->AddCbrTraffic(
-        SatTrafficHelper::RTN_LINK, SatTrafficHelper::UDP, MilliSeconds(100), 512,
+        SatTrafficHelper::RTN_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
+        packetSize,
         NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
         Singleton<SatTopology>::Get()->GetUtUserNodes(),
-        Seconds(1.0), Seconds(trafficDuration), Seconds(0));
+        Seconds(1.0), Seconds(simulationDuration), Seconds(0));
 
     Config::SetDefault("ns3::ConfigStore::Filename", 
         StringValue(SystemPath::Append(outputDir, "sat-handover-hap-attributes.xml")));
@@ -505,7 +535,6 @@ main(int argc, char* argv[])
 
     
     // Statistics
-    // Отключаем для отладки.
     Ptr<SatStatsHelperContainer> s = simulationHelper->GetStatisticsContainer();
     s->AddPerSatFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
     s->AddPerSatFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
