@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Plot trajectory points produced in '# time lat lon alt' format.
+Plot trajectory points produced in '% time lat lon alt' format.
 """
 
 import argparse
@@ -16,7 +16,7 @@ def read_points(path):
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             s = line.strip()
-            if not s or s.startswith("#"):
+            if not s or s.startswith("%"):
                 continue
             parts = s.split()
             if len(parts) < 4:
@@ -50,7 +50,7 @@ def draw_chevron_tick(ax, x, y, ux, uy, size=120.0, angle_deg=25.0, label=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Visualize trajectory from '# time lat lon alt' file."
+        description="Visualize trajectory from '% time lat lon alt' file."
     )
     parser.add_argument("input", help="Path to trajectory file")
     parser.add_argument(
