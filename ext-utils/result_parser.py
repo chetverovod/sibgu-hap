@@ -197,6 +197,23 @@ def render_report(
         ) from exc
 
     with PdfPages(output_pdf) as pdf:
+        page_number = 0
+
+        def save_page(fig) -> None:
+            nonlocal page_number
+            page_number += 1
+            fig.text(
+                0.985,
+                0.012,
+                f"Page {page_number}",
+                ha="right",
+                va="bottom",
+                fontsize=9,
+                color="dimgray",
+            )
+            pdf.savefig(fig)
+            plt.close(fig)
+
         # Cover page
         fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
         fig.suptitle("Simulation Results Report", fontsize=18, fontweight="bold", y=0.95)
@@ -225,8 +242,7 @@ def render_report(
             fontsize=10,
         )
         fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        pdf.savefig(fig)
-        plt.close(fig)
+        save_page(fig)
 
         if devices_table is not None:
             rows_per_page = 28
@@ -271,8 +287,7 @@ def render_report(
                     family="monospace",
                 )
                 fig.tight_layout(rect=(0, 0.06, 1, 0.96))
-                pdf.savefig(fig)
-                plt.close(fig)
+                save_page(fig)
 
         for stat in stat_files:
             x_vals = [x for x, _ in stat.rows]
@@ -301,8 +316,7 @@ def render_report(
                 family="monospace",
             )
             fig.tight_layout(rect=(0, 0.08, 1, 0.96))
-            pdf.savefig(fig)
-            plt.close(fig)
+            save_page(fig)
 
 
 def main() -> None:
