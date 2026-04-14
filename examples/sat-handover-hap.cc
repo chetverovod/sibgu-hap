@@ -66,7 +66,7 @@ LoadTraceSatIds(const std::string& scenarioName)
     std::string line;
     while (std::getline(input, line))
     {
-        if (line.empty() || line[0] == '#')
+        if (line.empty() || line[0] == '%')
         {
             continue;
         }

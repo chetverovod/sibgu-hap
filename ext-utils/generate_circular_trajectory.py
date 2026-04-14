@@ -67,7 +67,7 @@ def generate_circle_points(center_lat_deg,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate '# time lat lon alt' points for a circular trajectory.",
+        description="Generate '% time lat lon alt' points for a circular trajectory.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--center-lat", type=latitude, default=56.0119444444,
@@ -101,7 +101,7 @@ def main():
 
     out = sys.stdout if args.output == "-" else open(args.output, "w", encoding="utf-8")
     try:
-        out.write("# time lat lon alt\n")
+        out.write("% time lat lon alt\n")
         for t, lat, lon, alt in points:
             out.write(f"{t:.3f} {lat:.9f} {lon:.9f} {alt:.3f}\n")
     finally:
