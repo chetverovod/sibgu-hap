@@ -55,6 +55,13 @@ class PacketTraceTable:
     rows: List[List[str]]
 
 
+@dataclass
+class TocLink:
+    toc_page: int  # 1-based page number in final PDF
+    target_page: int  # 1-based page number in final PDF
+    rect_norm: Tuple[float, float, float, float]  # x0, y0, x1, y1 in [0..1]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -347,8 +354,13 @@ def render_report(
             "matplotlib is required. Install with: pip install matplotlib"
         ) from exc
 
+    toc_links: List[TocLink] = []
+
     with PdfPages(output_pdf) as pdf:
         page_number = 0
+        rows_per_devices_page = 28
+        rows_per_packet_page = 20
+        toc_rows_per_page = 32
 
         def save_page(fig) -> None:
             nonlocal page_number
@@ -364,6 +376,10 @@ def render_report(
             )
             pdf.savefig(fig)
             plt.close(fig)
+
+        def add_rubric(fig, y: float, label: str, value: str, label_x: float = PAGE_LEFT) -> None:
+            fig.text(label_x, y, label, fontsize=11, fontweight="bold")
+            fig.text(label_x + 0.195, y, value, fontsize=11)
 
         def estimate_lines(text: str, chars_per_line: int) -> int:
             if chars_per_line <= 0:
@@ -450,26 +466,58 @@ def render_report(
             fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.035, PAGE_RIGHT, PAGE_TOP))
             save_page(fig)
 
-        # Cover page
+        # Compute page map before rendering (for TOC and links).
+        toc_entries: List[Tuple[str, int]] = []
+        toc_entries.append(("Preamble", 1))
+
+        devices_pages = 0
+        if devices_table is not None:
+            devices_pages = (len(devices_table.rows) + rows_per_devices_page - 1) // rows_per_devices_page
+        packet_pages = 0
+        if packet_trace_table is not None:
+            packet_pages = (len(packet_trace_table.rows) + rows_per_packet_page - 1) // rows_per_packet_page
+        stat_pages = len(stat_files)
+
+        dynamic_entries_count = 0
+        if devices_pages > 0:
+            dynamic_entries_count += 1
+        if packet_pages > 0:
+            dynamic_entries_count += 1
+        dynamic_entries_count += stat_pages
+        toc_pages = max(1, (dynamic_entries_count + toc_rows_per_page - 1) // toc_rows_per_page)
+        first_content_page = 2 + toc_pages
+
+        page_cursor = first_content_page
+        if devices_pages > 0:
+            toc_entries.append(("Devices table", page_cursor))
+            page_cursor += devices_pages
+        if packet_pages > 0:
+            toc_entries.append(("PacketTrace summary table", page_cursor))
+            page_cursor += packet_pages
+        for stat in stat_files:
+            toc_entries.append((f"{stat.path.name}", page_cursor))
+            page_cursor += 1
+
+        # Cover page (preamble)
         fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
         fig.suptitle("Simulation Results Report", fontsize=18, fontweight="bold", y=PAGE_TOP - 0.01)
         now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         xml_text = ", ".join(p.name for p in xml_files) if xml_files else "Not found"
-        fig.text(PAGE_LEFT, PAGE_TOP - 0.13, f"Generated at: {now}", fontsize=11)
-        fig.text(PAGE_LEFT, PAGE_TOP - 0.18, f"Results directory: {results_dir}", fontsize=11)
-        fig.text(PAGE_LEFT, PAGE_TOP - 0.23, f"Statistics files included: {len(stat_files)}", fontsize=11)
-        fig.text(PAGE_LEFT, PAGE_TOP - 0.28, f"XML attributes file(s): {xml_text}", fontsize=11)
-        fig.text(
-            PAGE_LEFT,
+        add_rubric(fig, PAGE_TOP - 0.13, "Generated at:", now)
+        add_rubric(fig, PAGE_TOP - 0.18, "Results directory:", str(results_dir))
+        add_rubric(fig, PAGE_TOP - 0.23, "Statistics files included:", str(len(stat_files)))
+        add_rubric(fig, PAGE_TOP - 0.28, "XML attributes file(s):", xml_text)
+        add_rubric(
+            fig,
             PAGE_TOP - 0.33,
-            f"Devices table file: {devices_table.path.name if devices_table else 'Not found'}",
-            fontsize=11,
+            "Devices table file:",
+            devices_table.path.name if devices_table else "Not found",
         )
-        fig.text(
-            PAGE_LEFT,
+        add_rubric(
+            fig,
             PAGE_TOP - 0.38,
-            f"Packet trace file: {packet_trace_table.path.name if packet_trace_table else 'Not found'}",
-            fontsize=11,
+            "Packet trace file:",
+            packet_trace_table.path.name if packet_trace_table else "Not found",
         )
         fig.text(
             PAGE_LEFT,
@@ -486,15 +534,62 @@ def render_report(
         fig.subplots_adjust(left=PAGE_LEFT, right=PAGE_RIGHT, top=PAGE_TOP, bottom=PAGE_BOTTOM)
         save_page(fig)
 
+        # Table of contents (after preamble)
+        toc_items = toc_entries[1:]  # skip preamble self-link
+        for toc_start in range(0, len(toc_items), toc_rows_per_page):
+            toc_chunk = toc_items[toc_start:toc_start + toc_rows_per_page]
+            fig = plt.figure(figsize=(11.69, 8.27))
+            fig.suptitle("Table of Contents", fontsize=18, fontweight="bold", y=PAGE_TOP - 0.01)
+
+            y = PAGE_TOP - 0.08
+            line_h = 0.024
+            if len(toc_items) > toc_rows_per_page:
+                idx = (toc_start // toc_rows_per_page) + 1
+                cnt = (len(toc_items) + toc_rows_per_page - 1) // toc_rows_per_page
+                fig.text(PAGE_LEFT, y, f"Part {idx}/{cnt}", fontsize=10, color="dimgray")
+                y -= line_h * 1.2
+
+            for title, target_page in toc_chunk:
+                x0 = PAGE_LEFT
+                y0 = y - (line_h * 0.35)
+                x1 = PAGE_RIGHT - 0.06
+                y1 = y + (line_h * 0.55)
+                toc_page_number = page_number + 1
+                toc_links.append(
+                    TocLink(
+                        toc_page=toc_page_number,
+                        target_page=target_page,
+                        rect_norm=(x0, y0, x1, y1),
+                    )
+                )
+                fig.text(
+                    PAGE_LEFT,
+                    y,
+                    title,
+                    fontsize=10.5,
+                    color="#0b57d0",
+                )
+                fig.text(PAGE_RIGHT, y, f"{target_page}", fontsize=10.5, ha="right")
+                y -= line_h
+
+            fig.text(
+                PAGE_LEFT,
+                PAGE_BOTTOM + 0.003,
+                "Click item title to jump to page (viewer support may vary).",
+                fontsize=8.5,
+                color="dimgray",
+            )
+            fig.subplots_adjust(left=PAGE_LEFT, right=PAGE_RIGHT, top=PAGE_TOP, bottom=PAGE_BOTTOM)
+            save_page(fig)
+
         if devices_table is not None:
-            rows_per_page = 28
-            for chunk_start in range(0, len(devices_table.rows), rows_per_page):
-                chunk = devices_table.rows[chunk_start:chunk_start + rows_per_page]
+            for chunk_start in range(0, len(devices_table.rows), rows_per_devices_page):
+                chunk = devices_table.rows[chunk_start:chunk_start + rows_per_devices_page]
                 fig, ax = plt.subplots(figsize=(11.69, 8.27))
                 title_suffix = ""
-                if len(devices_table.rows) > rows_per_page:
-                    page_idx = (chunk_start // rows_per_page) + 1
-                    page_cnt = (len(devices_table.rows) + rows_per_page - 1) // rows_per_page
+                if len(devices_table.rows) > rows_per_devices_page:
+                    page_idx = (chunk_start // rows_per_devices_page) + 1
+                    page_cnt = (len(devices_table.rows) + rows_per_devices_page - 1) // rows_per_devices_page
                     title_suffix = f" (page {page_idx}/{page_cnt})"
                 chunk_with_idx = [
                     [f"{chunk_start + i + 1}."] + row
@@ -521,14 +616,13 @@ def render_report(
                 )
 
         if packet_trace_table is not None:
-            rows_per_page = 20
-            for chunk_start in range(0, len(packet_trace_table.rows), rows_per_page):
-                chunk = packet_trace_table.rows[chunk_start:chunk_start + rows_per_page]
+            for chunk_start in range(0, len(packet_trace_table.rows), rows_per_packet_page):
+                chunk = packet_trace_table.rows[chunk_start:chunk_start + rows_per_packet_page]
                 fig, ax = plt.subplots(figsize=(11.69, 8.27))
                 title_suffix = ""
-                if len(packet_trace_table.rows) > rows_per_page:
-                    page_idx = (chunk_start // rows_per_page) + 1
-                    page_cnt = (len(packet_trace_table.rows) + rows_per_page - 1) // rows_per_page
+                if len(packet_trace_table.rows) > rows_per_packet_page:
+                    page_idx = (chunk_start // rows_per_packet_page) + 1
+                    page_cnt = (len(packet_trace_table.rows) + rows_per_packet_page - 1) // rows_per_packet_page
                     title_suffix = f" (page {page_idx}/{page_cnt})"
                 chunk_with_idx = [
                     [f"{chunk_start + i + 1}."] + row
@@ -576,6 +670,73 @@ def render_report(
             )
             fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
             save_page(fig)
+
+    links_ok, links_msg = add_internal_toc_links(output_pdf, toc_links)
+    if links_ok:
+        print(f"[INFO] {links_msg}")
+    else:
+        print(f"[WARNING] {links_msg}")
+
+
+def add_internal_toc_links(pdf_path: Path, links: List[TocLink]) -> Tuple[bool, str]:
+    if not links:
+        return True, "TOC is empty: no links to embed."
+
+    try:
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.annotations import Link
+        from pypdf.generic import Fit
+    except Exception:
+        # If pypdf is unavailable, keep report usable without links.
+        return (
+            False,
+            "Internal TOC links were NOT embedded: package 'pypdf' is not installed. "
+            "Install it with: pip install pypdf",
+        )
+
+    reader = PdfReader(str(pdf_path))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+
+    embedded = 0
+    for link in links:
+        toc_idx = link.toc_page - 1
+        dst_idx = link.target_page - 1
+        if toc_idx < 0 or toc_idx >= len(writer.pages):
+            continue
+        if dst_idx < 0 or dst_idx >= len(writer.pages):
+            continue
+
+        page = writer.pages[toc_idx]
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+        x0n, y0n, x1n, y1n = link.rect_norm
+        rect = (
+            x0n * width,
+            y0n * height,
+            x1n * width,
+            y1n * height,
+        )
+
+        if hasattr(writer, "add_link"):
+            # Legacy API (older pypdf/PyPDF2 versions)
+            writer.add_link(toc_idx, dst_idx, rect, fit="/Fit")
+        else:
+            # Current API (newer pypdf versions)
+            writer.add_annotation(
+                toc_idx,
+                Link(
+                    rect=rect,
+                    target_page_index=dst_idx,
+                    fit=Fit.fit(),
+                ),
+            )
+        embedded += 1
+
+    with pdf_path.open("wb") as out:
+        writer.write(out)
+    return True, f"Embedded {embedded} internal TOC link(s)."
 
 
 def main() -> None:
