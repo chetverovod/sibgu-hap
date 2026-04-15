@@ -56,6 +56,12 @@ class PacketTraceTable:
 
 
 @dataclass
+class SummaryTable:
+    header: List[str]
+    rows: List[List[str]]
+
+
+@dataclass
 class TocLink:
     toc_page: int  # 1-based page number in final PDF
     target_page: int  # 1-based page number in final PDF
@@ -338,11 +344,65 @@ def parse_packet_trace(results_dir: Path) -> Optional[PacketTraceTable]:
     return PacketTraceTable(path=path, header=header, rows=active_rows)
 
 
+def build_summary_table(stat_files: List[StatFile]) -> Optional[SummaryTable]:
+    if not stat_files:
+        return None
+
+    header = [
+        "No.",
+        "source_file",
+        "scope",
+        "dir",
+        "point",
+        "metric",
+        "fmt",
+        "id",
+        "samples",
+        "min",
+        "avg",
+        "max",
+        "sum",
+        "last",
+    ]
+    rows: List[List[str]] = []
+
+    for i, stat in enumerate(stat_files, start=1):
+        y_vals = [y for _, y in stat.rows]
+        sample_count = len(y_vals)
+        y_min = min(y_vals)
+        y_max = max(y_vals)
+        y_sum = sum(y_vals)
+        y_avg = y_sum / sample_count if sample_count else 0.0
+        y_last = y_vals[-1] if sample_count else 0.0
+
+        rows.append(
+            [
+                f"{i}.",
+                stat.path.name,
+                stat.scope,
+                stat.direction,
+                stat.measurement,
+                stat.metric,
+                stat.fmt,
+                str(stat.entity_id),
+                str(sample_count),
+                f"{y_min:.6g}",
+                f"{y_avg:.6g}",
+                f"{y_max:.6g}",
+                f"{y_sum:.6g}",
+                f"{y_last:.6g}",
+            ]
+        )
+
+    return SummaryTable(header=header, rows=rows)
+
+
 def render_report(
     output_pdf: Path,
     results_dir: Path,
     stat_files: List[StatFile],
     xml_files: List[Path],
+    summary_table: Optional[SummaryTable],
     devices_table: Optional[DevicesTable],
     packet_trace_table: Optional[PacketTraceTable],
 ) -> None:
@@ -360,6 +420,7 @@ def render_report(
         page_number = 0
         rows_per_devices_page = 28
         rows_per_packet_page = 20
+        rows_per_summary_page = 22
         toc_rows_per_page = 32
 
         def save_page(fig) -> None:
@@ -471,6 +532,9 @@ def render_report(
         toc_entries.append(("Preamble", 1))
 
         devices_pages = 0
+        summary_pages = 0
+        if summary_table is not None:
+            summary_pages = (len(summary_table.rows) + rows_per_summary_page - 1) // rows_per_summary_page
         if devices_table is not None:
             devices_pages = (len(devices_table.rows) + rows_per_devices_page - 1) // rows_per_devices_page
         packet_pages = 0
@@ -483,11 +547,16 @@ def render_report(
             dynamic_entries_count += 1
         if packet_pages > 0:
             dynamic_entries_count += 1
+        if summary_pages > 0:
+            dynamic_entries_count += 1
         dynamic_entries_count += stat_pages
         toc_pages = max(1, (dynamic_entries_count + toc_rows_per_page - 1) // toc_rows_per_page)
         first_content_page = 2 + toc_pages
 
         page_cursor = first_content_page
+        if summary_pages > 0:
+            toc_entries.append(("Key metrics summary table", page_cursor))
+            page_cursor += summary_pages
         if devices_pages > 0:
             toc_entries.append(("Devices table", page_cursor))
             page_cursor += devices_pages
@@ -581,6 +650,28 @@ def render_report(
             )
             fig.subplots_adjust(left=PAGE_LEFT, right=PAGE_RIGHT, top=PAGE_TOP, bottom=PAGE_BOTTOM)
             save_page(fig)
+
+        if summary_table is not None:
+            for chunk_start in range(0, len(summary_table.rows), rows_per_summary_page):
+                chunk = summary_table.rows[chunk_start:chunk_start + rows_per_summary_page]
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                title_suffix = ""
+                if len(summary_table.rows) > rows_per_summary_page:
+                    page_idx = (chunk_start // rows_per_summary_page) + 1
+                    page_cnt = (len(summary_table.rows) + rows_per_summary_page - 1) // rows_per_summary_page
+                    title_suffix = f" (page {page_idx}/{page_cnt})"
+                draw_table_page(
+                    fig=fig,
+                    ax=ax,
+                    title=f"Key Metrics Summary{title_suffix}",
+                    header=summary_table.header,
+                    rows=chunk,
+                    source_text="Source: aggregated from non-empty stat-*.txt files",
+                    body_fontsize=7.3,
+                    header_fontsize=7.6,
+                    chars_per_col=[4, 27, 7, 5, 10, 8, 6, 4, 8, 10, 10, 10, 10, 10],
+                    col_widths=[0.03, 0.282, 0.06, 0.028, 0.081, 0.07, 0.05, 0.03, 0.06, 0.065, 0.065, 0.065, 0.065, 0.049],
+                )
 
         if devices_table is not None:
             for chunk_start in range(0, len(devices_table.rows), rows_per_devices_page):
@@ -750,6 +841,7 @@ def main() -> None:
 
     stat_files = collect_stat_files(results_dir)
     xml_files = find_xml_files(results_dir)
+    summary_table = build_summary_table(stat_files)
     devices_table = parse_devices_table(results_dir)
     packet_trace_table = parse_packet_trace(results_dir)
 
@@ -764,6 +856,7 @@ def main() -> None:
         results_dir,
         stat_files,
         xml_files,
+        summary_table,
         devices_table,
         packet_trace_table,
     )
