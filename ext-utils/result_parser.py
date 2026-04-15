@@ -63,7 +63,7 @@ class SummaryTable:
 
 @dataclass
 class TocLink:
-    toc_page: int  # 1-based page number in final PDF
+    from_page: int  # 1-based page number in final PDF
     target_page: int  # 1-based page number in final PDF
     rect_norm: Tuple[float, float, float, float]  # x0, y0, x1, y1 in [0..1]
 
@@ -463,6 +463,10 @@ def render_report(
             chars_per_col: List[int],
             col_widths: Optional[List[float]] = None,
             force_left_cols: Optional[List[int]] = None,
+            link_targets: Optional[List[Optional[int]]] = None,
+            link_col_idx: Optional[int] = None,
+            fixed_body_row_height: Optional[float] = None,
+            link_text_color: str = "#0b57d0",
         ) -> None:
             ax.axis("off")
             ax.set_title(title, fontsize=13, pad=12)
@@ -470,12 +474,15 @@ def render_report(
             header_h = 0.038
             base_h = 0.030
             row_heights: List[float] = []
-            for row in rows:
-                max_lines = 1
-                for idx, value in enumerate(row):
-                    limit = chars_per_col[idx] if idx < len(chars_per_col) else 14
-                    max_lines = max(max_lines, estimate_lines(str(value), limit))
-                row_heights.append(base_h * max_lines)
+            if fixed_body_row_height is not None:
+                row_heights = [fixed_body_row_height for _ in rows]
+            else:
+                for row in rows:
+                    max_lines = 1
+                    for idx, value in enumerate(row):
+                        limit = chars_per_col[idx] if idx < len(chars_per_col) else 14
+                        max_lines = max(max_lines, estimate_lines(str(value), limit))
+                    row_heights.append(base_h * max_lines)
 
             table_height = header_h + sum(row_heights)
             max_table_height = 0.78
@@ -529,6 +536,40 @@ def render_report(
                         cell.set_text_props(ha="left")
                         cell._text.set_x(0.02)
 
+            # Optional clickable links for a specific column (per row).
+            if link_targets is not None and link_col_idx is not None and 0 <= link_col_idx < n_cols:
+                current_page = page_number + 1
+                table_width = PAGE_RIGHT - PAGE_LEFT
+                if col_widths and len(col_widths) == n_cols:
+                    widths = col_widths
+                else:
+                    widths = [1.0 / n_cols] * n_cols
+                x0_col = PAGE_LEFT + table_width * sum(widths[:link_col_idx])
+                x1_col = PAGE_LEFT + table_width * sum(widths[:link_col_idx + 1])
+                body_top = table_y + table_height - header_h
+                y_cursor = body_top
+                for row_idx, row_h in enumerate(row_heights):
+                    target_page = link_targets[row_idx] if row_idx < len(link_targets) else None
+                    y_top = y_cursor
+                    y_bottom = y_top - row_h
+                    y_cursor = y_bottom
+                    if target_page is None:
+                        continue
+                    # Visual highlight for clickable links in table cell.
+                    cell = table[(row_idx + 1, link_col_idx)]
+                    cell.set_text_props(color=link_text_color)
+                    try:
+                        cell.get_text().set_underline(True)
+                    except Exception:
+                        pass
+                    toc_links.append(
+                        TocLink(
+                            from_page=current_page,
+                            target_page=target_page,
+                            rect_norm=(x0_col, y_bottom, x1_col, y_top),
+                        )
+                    )
+
             fig.text(
                 PAGE_LEFT,
                 PAGE_BOTTOM + 0.003,
@@ -567,6 +608,7 @@ def render_report(
         first_content_page = 2 + toc_pages
 
         page_cursor = first_content_page
+        stat_page_map: Dict[str, int] = {}
         if summary_pages > 0:
             toc_entries.append(("Key metrics summary table", page_cursor))
             page_cursor += summary_pages
@@ -578,6 +620,7 @@ def render_report(
             page_cursor += packet_pages
         for stat in stat_files:
             toc_entries.append((f"{stat.path.name}", page_cursor))
+            stat_page_map[stat.path.name] = page_cursor
             page_cursor += 1
 
         # Cover page (preamble)
@@ -639,7 +682,7 @@ def render_report(
                 toc_page_number = page_number + 1
                 toc_links.append(
                     TocLink(
-                        toc_page=toc_page_number,
+                        from_page=toc_page_number,
                         target_page=target_page,
                         rect_norm=(x0, y0, x1, y1),
                     )
@@ -667,6 +710,10 @@ def render_report(
         if summary_table is not None:
             for chunk_start in range(0, len(summary_table.rows), rows_per_summary_page):
                 chunk = summary_table.rows[chunk_start:chunk_start + rows_per_summary_page]
+                chunk_targets: List[Optional[int]] = []
+                for row in chunk:
+                    src_file = row[1] if len(row) > 1 else ""
+                    chunk_targets.append(stat_page_map.get(src_file))
                 fig, ax = plt.subplots(figsize=(11.69, 8.27))
                 title_suffix = ""
                 if len(summary_table.rows) > rows_per_summary_page:
@@ -685,6 +732,9 @@ def render_report(
                     chars_per_col=[4, 27, 7, 5, 10, 8, 6, 4, 8, 10, 10, 10, 10, 10],
                     col_widths=[0.03, 0.3525, 0.06, 0.028, 0.081, 0.07, 0.05, 0.03, 0.06, 0.051, 0.051, 0.051, 0.051, 0.0345],
                     force_left_cols=[1],
+                    link_targets=chunk_targets,
+                    link_col_idx=1,
+                    fixed_body_row_height=0.03,
                 )
 
         if devices_table is not None:
@@ -806,7 +856,7 @@ def add_internal_toc_links(pdf_path: Path, links: List[TocLink]) -> Tuple[bool, 
 
     embedded = 0
     for link in links:
-        toc_idx = link.toc_page - 1
+        toc_idx = link.from_page - 1
         dst_idx = link.target_page - 1
         if toc_idx < 0 or toc_idx >= len(writer.pages):
             continue
