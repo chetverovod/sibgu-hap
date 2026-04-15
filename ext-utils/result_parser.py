@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -58,7 +59,7 @@ class PacketTraceTable:
 @dataclass
 class SatCoordinatesData:
     path: Path
-    by_sat_id: Dict[int, List[Tuple[float, float, float]]]  # sat_id -> [(t, lat, lon), ...]
+    by_sat_id: Dict[int, List[Tuple[float, float, float, float]]]  # sat_id -> [(t, lat, lon, alt), ...]
 
 
 @dataclass
@@ -91,6 +92,34 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Output PDF path; by default <results_dir>/results_report.pdf",
+    )
+    parser.add_argument(
+        "--satellite-maps",
+        choices=["all", "none", "list"],
+        default="all",
+        help=(
+            "Additional per-satellite trajectory maps mode. "
+            "'all' = map for each satellite, "
+            "'none' = disable extra maps, "
+            "'list' = only satellites from --satellite-map-list"
+        ),
+    )
+    parser.add_argument(
+        "--satellite-map-list",
+        default="",
+        help=(
+            "Comma/space separated satellite ids for --satellite-maps list mode "
+            "(example: '0,2,5')."
+        ),
+    )
+    parser.add_argument(
+        "--quiet-cartopy-download-warnings",
+        choices=["on", "off"],
+        default="on",
+        help=(
+            "Suppress cartopy DownloadWarning messages about Natural Earth downloads "
+            "during map rendering."
+        ),
     )
     return parser.parse_args()
 
@@ -355,7 +384,7 @@ def parse_sat_coordinates(results_dir: Path) -> Optional[SatCoordinatesData]:
     if not path.exists() or not path.is_file():
         return None
 
-    by_sat_id: Dict[int, List[Tuple[float, float, float]]] = {}
+    by_sat_id: Dict[int, List[Tuple[float, float, float, float]]] = {}
     with path.open("r", encoding="utf-8") as f:
         for raw_line in f:
             line = raw_line.strip()
@@ -369,13 +398,52 @@ def parse_sat_coordinates(results_dir: Path) -> Optional[SatCoordinatesData]:
                 sat_id = int(parts[1])
                 lat = float(parts[2])
                 lon = float(parts[3])
+                alt = float(parts[4])
             except ValueError:
                 continue
-            by_sat_id.setdefault(sat_id, []).append((t, lat, lon))
+            by_sat_id.setdefault(sat_id, []).append((t, lat, lon, alt))
 
     if not by_sat_id:
         return None
     return SatCoordinatesData(path=path, by_sat_id=by_sat_id)
+
+
+def select_additional_satellite_maps(
+    sat_coordinates: Optional[SatCoordinatesData],
+    mode: str,
+    sat_list_arg: str,
+) -> List[int]:
+    if sat_coordinates is None:
+        return []
+
+    available = sorted(sat_coordinates.by_sat_id.keys())
+    if mode == "none":
+        return []
+    if mode == "all":
+        return available
+
+    # mode == "list"
+    tokens = [t for t in re.split(r"[,\s]+", sat_list_arg.strip()) if t]
+    if not tokens:
+        print(
+            "[WARNING] --satellite-maps list selected but --satellite-map-list is empty. "
+            "No additional per-satellite maps will be drawn."
+        )
+        return []
+
+    selected: List[int] = []
+    for token in tokens:
+        try:
+            sat_id = int(token)
+        except ValueError:
+            print(f"[WARNING] Ignoring invalid satellite id token: '{token}'")
+            continue
+        if sat_id not in sat_coordinates.by_sat_id:
+            print(f"[WARNING] Satellite id {sat_id} not found in SatCoordinates.log; ignored.")
+            continue
+        if sat_id not in selected:
+            selected.append(sat_id)
+    return selected
 
 
 def build_summary_table(stat_files: List[StatFile]) -> Optional[SummaryTable]:
@@ -437,6 +505,8 @@ def render_report(
     stat_files: List[StatFile],
     xml_files: List[Path],
     sat_coordinates: Optional[SatCoordinatesData],
+    additional_sat_map_ids: List[int],
+    quiet_cartopy_download_warnings: bool,
     summary_table: Optional[SummaryTable],
     devices_table: Optional[DevicesTable],
     packet_trace_table: Optional[PacketTraceTable],
@@ -629,7 +699,7 @@ def render_report(
         toc_entries: List[Tuple[str, int]] = []
         toc_entries.append(("Preamble", 1))
 
-        sat_map_pages = 1 if sat_coordinates is not None else 0
+        sat_map_pages = 1 + len(additional_sat_map_ids) if sat_coordinates is not None else 0
         devices_pages = 0
         summary_pages = 0
         if summary_table is not None:
@@ -657,7 +727,10 @@ def render_report(
         page_cursor = first_content_page
         if sat_map_pages > 0:
             toc_entries.append(("Satellite coordinates map", page_cursor))
-            page_cursor += sat_map_pages
+            page_cursor += 1
+            for sat_id in additional_sat_map_ids:
+                toc_entries.append((f"Satellite map: sat {sat_id}", page_cursor))
+                page_cursor += 1
         stat_page_map: Dict[str, int] = {}
         if summary_pages > 0:
             toc_entries.append(("Key metrics summary table", page_cursor))
@@ -763,82 +836,182 @@ def render_report(
             fig.subplots_adjust(left=PAGE_LEFT, right=PAGE_RIGHT, top=PAGE_TOP, bottom=PAGE_BOTTOM)
             save_page(fig)
 
-        # Satellite coordinates map page (after table of contents)
+        # Satellite coordinates map page(s) (after table of contents)
         if sat_coordinates is not None:
-            fig = plt.figure(figsize=(11.69, 8.27))
-            map_rendered = False
-            try:
-                import cartopy.crs as ccrs
-                import cartopy.feature as cfeature
+            cartopy_warning_printed = False
 
-                ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
-                ax.set_global()
-                ax.add_feature(cfeature.OCEAN, facecolor="white", edgecolor="none")
-                ax.add_feature(cfeature.LAND, facecolor="0.9", edgecolor="black", linewidth=0.3)
-                ax.coastlines(color="black", linewidth=0.5)
-                ax.gridlines(
-                    draw_labels=False,
-                    color="0.6",
-                    linewidth=0.4,
-                    alpha=0.5,
-                    linestyle="--",
-                )
-                for sat_id in sorted(sat_coordinates.by_sat_id.keys()):
-                    pts = sat_coordinates.by_sat_id[sat_id]
-                    lats = [p[1] for p in pts]
-                    lons = [p[2] for p in pts]
-                    ax.plot(
-                        lons,
-                        lats,
-                        transform=ccrs.PlateCarree(),
-                        linewidth=1.0,
-                        label=f"sat {sat_id}",
+            def render_satellite_map_page(sat_ids: List[int], title: str) -> None:
+                nonlocal cartopy_warning_printed
+                fig = plt.figure(figsize=(11.69, 8.27))
+                map_rendered = False
+
+                all_lats: List[float] = []
+                all_lons: List[float] = []
+                for sat_id in sat_ids:
+                    pts = sat_coordinates.by_sat_id.get(sat_id, [])
+                    all_lats.extend([p[1] for p in pts])
+                    all_lons.extend([p[2] for p in pts])
+
+                lat_min = min(all_lats) if all_lats else -90.0
+                lat_max = max(all_lats) if all_lats else 90.0
+                lon_min = min(all_lons) if all_lons else -180.0
+                lon_max = max(all_lons) if all_lons else 180.0
+                lat_span = max(0.1, lat_max - lat_min)
+                lon_span = max(0.1, lon_max - lon_min)
+                lat_pad = max(0.15, lat_span * 0.15)
+                lon_pad = max(0.15, lon_span * 0.15)
+                lat0 = max(-90.0, lat_min - lat_pad)
+                lat1 = min(90.0, lat_max + lat_pad)
+                lon0 = max(-180.0, lon_min - lon_pad)
+                lon1 = min(180.0, lon_max + lon_pad)
+
+                try:
+                    import cartopy.crs as ccrs
+                    import cartopy.feature as cfeature
+                    from cartopy.io import DownloadWarning
+                    from cartopy.mpl.gridliner import LATITUDE_FORMATTER, LONGITUDE_FORMATTER
+
+                    ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+                    ax.set_extent([lon0, lon1, lat0, lat1], crs=ccrs.PlateCarree())
+                    # Suppress verbose Natural Earth download warnings in report generation.
+                    with warnings.catch_warnings():
+                        if quiet_cartopy_download_warnings:
+                            warnings.filterwarnings("ignore", category=DownloadWarning)
+                        ax.add_feature(cfeature.OCEAN, facecolor="white", edgecolor="none")
+                        ax.add_feature(cfeature.LAND, facecolor="0.9", edgecolor="black", linewidth=0.3)
+                        ax.coastlines(color="black", linewidth=0.5)
+                    gl = ax.gridlines(
+                        draw_labels=True,
+                        color="0.6",
+                        linewidth=0.4,
+                        alpha=0.5,
+                        linestyle="--",
                     )
-                map_rendered = True
-            except Exception:
-                print(
-                    "[WARNING] cartopy is not installed (or failed to import). "
-                    "Using fallback lon/lat plot without coastline map. "
-                    "Install with: pip install cartopy"
-                )
-                ax = fig.add_subplot(1, 1, 1)
-                ax.set_xlim(-180, 180)
-                ax.set_ylim(-90, 90)
-                ax.set_xlabel("Longitude (deg)")
-                ax.set_ylabel("Latitude (deg)")
-                ax.grid(True, linestyle="--", color="0.6", linewidth=0.4, alpha=0.6)
-                for sat_id in sorted(sat_coordinates.by_sat_id.keys()):
-                    pts = sat_coordinates.by_sat_id[sat_id]
-                    lats = [p[1] for p in pts]
-                    lons = [p[2] for p in pts]
-                    ax.plot(lons, lats, linewidth=1.0, label=f"sat {sat_id}")
-                ax.text(
-                    0.5,
-                    0.01,
-                    "Cartopy not available: showing lon/lat trajectories without coastline layer.",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="bottom",
-                    fontsize=8.5,
-                    color="dimgray",
-                )
+                    gl.top_labels = False
+                    gl.right_labels = False
+                    gl.xformatter = LONGITUDE_FORMATTER
+                    gl.yformatter = LATITUDE_FORMATTER
+                    gl.xlabel_style = {"size": 8, "color": "0.25"}
+                    gl.ylabel_style = {"size": 8, "color": "0.25"}
+                    for sat_id in sat_ids:
+                        pts = sat_coordinates.by_sat_id.get(sat_id, [])
+                        lats = [p[1] for p in pts]
+                        lons = [p[2] for p in pts]
+                        alt_last = pts[-1][3] if pts else 0.0
+                        ax.plot(
+                            lons,
+                            lats,
+                            transform=ccrs.PlateCarree(),
+                            linewidth=1.0,
+                            label=f"sat {sat_id} ({alt_last:.0f} m)",
+                        )
+                        if lats and lons:
+                            ax.text(
+                                lons[-1],
+                                lats[-1],
+                                f"sat {sat_id}",
+                                transform=ccrs.PlateCarree(),
+                                fontsize=8,
+                                ha="left",
+                                va="bottom",
+                                color="black",
+                                bbox={"boxstyle": "round,pad=0.12", "fc": "white", "ec": "0.4", "alpha": 0.7},
+                            )
+                        if len(lats) >= 2 and len(lons) >= 2:
+                            i0, i1 = -2, -1
+                            if lats[i0] == lats[i1] and lons[i0] == lons[i1]:
+                                i0, i1 = 0, 1
+                            ax.annotate(
+                                "",
+                                xy=(lons[i1], lats[i1]),
+                                xytext=(lons[i0], lats[i0]),
+                                xycoords=ccrs.PlateCarree()._as_mpl_transform(ax),
+                                textcoords=ccrs.PlateCarree()._as_mpl_transform(ax),
+                                arrowprops=dict(arrowstyle="->", color="black", lw=1.0),
+                            )
+                    map_rendered = True
+                except Exception:
+                    if not cartopy_warning_printed:
+                        print(
+                            "[WARNING] cartopy is not installed (or failed to import). "
+                            "Using fallback lon/lat plot without coastline map. "
+                            "Install with: pip install cartopy"
+                        )
+                        cartopy_warning_printed = True
+                    ax = fig.add_subplot(1, 1, 1)
+                    ax.set_xlim(lon0, lon1)
+                    ax.set_ylim(lat0, lat1)
+                    ax.set_xlabel("Longitude (deg)")
+                    ax.set_ylabel("Latitude (deg)")
+                    ax.grid(True, linestyle="--", color="0.6", linewidth=0.4, alpha=0.6)
+                    # Explicit coordinate ticks so grid coordinates are visible on all fallback maps.
+                    xt_step = 1 if (lon1 - lon0) <= 15 else 2 if (lon1 - lon0) <= 40 else 5
+                    yt_step = 1 if (lat1 - lat0) <= 15 else 2 if (lat1 - lat0) <= 40 else 5
+                    x_start = int(lon0 // xt_step) * xt_step
+                    y_start = int(lat0 // yt_step) * yt_step
+                    ax.set_xticks(list(range(x_start, int(lon1) + xt_step, xt_step)))
+                    ax.set_yticks(list(range(y_start, int(lat1) + yt_step, yt_step)))
+                    for sat_id in sat_ids:
+                        pts = sat_coordinates.by_sat_id.get(sat_id, [])
+                        lats = [p[1] for p in pts]
+                        lons = [p[2] for p in pts]
+                        alt_last = pts[-1][3] if pts else 0.0
+                        ax.plot(lons, lats, linewidth=1.0, label=f"sat {sat_id} ({alt_last:.0f} m)")
+                        if lats and lons:
+                            ax.text(
+                                lons[-1],
+                                lats[-1],
+                                f"sat {sat_id}",
+                                fontsize=8,
+                                ha="left",
+                                va="bottom",
+                                color="black",
+                                bbox={"boxstyle": "round,pad=0.12", "fc": "white", "ec": "0.4", "alpha": 0.7},
+                            )
+                        if len(lats) >= 2 and len(lons) >= 2:
+                            i0, i1 = -2, -1
+                            if lats[i0] == lats[i1] and lons[i0] == lons[i1]:
+                                i0, i1 = 0, 1
+                            ax.annotate(
+                                "",
+                                xy=(lons[i1], lats[i1]),
+                                xytext=(lons[i0], lats[i0]),
+                                arrowprops=dict(arrowstyle="->", color="black", lw=1.0),
+                            )
+                    ax.text(
+                        0.5,
+                        0.01,
+                        "Cartopy not available: showing lon/lat trajectories without coastline layer.",
+                        transform=ax.transAxes,
+                        ha="center",
+                        va="bottom",
+                        fontsize=8.5,
+                        color="dimgray",
+                    )
 
-            ax.set_title("Satellite coordinates over world map", fontsize=13, pad=12)
-            ax.legend(loc="lower left", fontsize=8, frameon=True)
-            fig.text(
-                PAGE_LEFT,
-                PAGE_BOTTOM + 0.003,
-                (
-                    f"Source: {sat_coordinates.path.name} | satellites: "
-                    f"{len(sat_coordinates.by_sat_id)} | "
-                    f"map: {'cartopy bw' if map_rendered else 'fallback lon/lat'}"
-                ),
-                fontsize=8.5,
-                va="bottom",
-                family="monospace",
+                ax.set_title(title, fontsize=13, pad=12)
+                ax.legend(loc="lower left", fontsize=8, frameon=True)
+                fig.text(
+                    PAGE_LEFT,
+                    PAGE_BOTTOM + 0.003,
+                    (
+                        f"Source: {sat_coordinates.path.name} | satellites: "
+                        f"{len(sat_ids)} | "
+                        f"map: {'cartopy bw' if map_rendered else 'fallback lon/lat'}"
+                    ),
+                    fontsize=8.5,
+                    va="bottom",
+                    family="monospace",
+                )
+                fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
+                save_page(fig)
+
+            render_satellite_map_page(
+                sorted(sat_coordinates.by_sat_id.keys()),
+                "Satellite coordinates over world map",
             )
-            fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
-            save_page(fig)
+            for sat_id in additional_sat_map_ids:
+                render_satellite_map_page([sat_id], f"Satellite trajectory map: sat {sat_id}")
 
         if summary_table is not None:
             for chunk_start in range(0, len(summary_table.rows), rows_per_summary_page):
@@ -1035,10 +1208,23 @@ def main() -> None:
         raise SystemExit(f"Directory does not exist: {results_dir}")
 
     output_pdf = args.output.resolve() if args.output else results_dir / "results_report.pdf"
+    print(
+        "[INFO] To avoid Cartopy Natural Earth downloads, pre-install datasets in cache "
+        "(or set CARTOPY_DATA_DIR to a populated local directory)."
+    )
+    if args.quiet_cartopy_download_warnings == "on":
+        print("[INFO] cartopy DownloadWarning suppression: ON")
+    else:
+        print("[INFO] cartopy DownloadWarning suppression: OFF")
 
     stat_files = collect_stat_files(results_dir)
     xml_files = find_xml_files(results_dir)
     sat_coordinates = parse_sat_coordinates(results_dir)
+    additional_sat_map_ids = select_additional_satellite_maps(
+        sat_coordinates,
+        args.satellite_maps,
+        args.satellite_map_list,
+    )
     summary_table = build_summary_table(stat_files)
     devices_table = parse_devices_table(results_dir)
     packet_trace_table = parse_packet_trace(results_dir)
@@ -1060,6 +1246,8 @@ def main() -> None:
         stat_files,
         xml_files,
         sat_coordinates,
+        additional_sat_map_ids,
+        args.quiet_cartopy_download_warnings == "on",
         summary_table,
         devices_table,
         packet_trace_table,
