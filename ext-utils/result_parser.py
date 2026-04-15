@@ -537,22 +537,11 @@ def render_report(
                         cell._text.set_x(0.02)
 
             # Optional clickable links for a specific column (per row).
+            links_to_add: List[TocLink] = []
             if link_targets is not None and link_col_idx is not None and 0 <= link_col_idx < n_cols:
                 current_page = page_number + 1
-                table_width = PAGE_RIGHT - PAGE_LEFT
-                if col_widths and len(col_widths) == n_cols:
-                    widths = col_widths
-                else:
-                    widths = [1.0 / n_cols] * n_cols
-                x0_col = PAGE_LEFT + table_width * sum(widths[:link_col_idx])
-                x1_col = PAGE_LEFT + table_width * sum(widths[:link_col_idx + 1])
-                body_top = table_y + table_height - header_h
-                y_cursor = body_top
-                for row_idx, row_h in enumerate(row_heights):
+                for row_idx, _ in enumerate(row_heights):
                     target_page = link_targets[row_idx] if row_idx < len(link_targets) else None
-                    y_top = y_cursor
-                    y_bottom = y_top - row_h
-                    y_cursor = y_bottom
                     if target_page is None:
                         continue
                     # Visual highlight for clickable links in table cell.
@@ -562,11 +551,11 @@ def render_report(
                         cell.get_text().set_underline(True)
                     except Exception:
                         pass
-                    toc_links.append(
+                    links_to_add.append(
                         TocLink(
                             from_page=current_page,
                             target_page=target_page,
-                            rect_norm=(x0_col, y_bottom, x1_col, y_top),
+                            rect_norm=(0.0, 0.0, 0.0, 0.0),  # filled after final layout
                         )
                     )
 
@@ -579,6 +568,26 @@ def render_report(
                 family="monospace",
             )
             fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.035, PAGE_RIGHT, PAGE_TOP))
+
+            # Compute link rectangles after final layout from actual cell geometry.
+            if links_to_add and link_col_idx is not None:
+                fig.canvas.draw()
+                renderer = fig.canvas.get_renderer()
+                for row_idx, link in enumerate(links_to_add):
+                    cell = table[(row_idx + 1, link_col_idx)]
+                    bbox = cell.get_window_extent(renderer=renderer)
+                    (x0, y0) = fig.transFigure.inverted().transform((bbox.x0, bbox.y0))
+                    (x1, y1) = fig.transFigure.inverted().transform((bbox.x1, bbox.y1))
+                    # Small inset to avoid touching borders
+                    pad_x = 0.0015
+                    pad_y = 0.001
+                    x0 = max(0.0, min(1.0, x0 + pad_x))
+                    y0 = max(0.0, min(1.0, y0 + pad_y))
+                    x1 = max(0.0, min(1.0, x1 - pad_x))
+                    y1 = max(0.0, min(1.0, y1 - pad_y))
+                    if x1 > x0 and y1 > y0:
+                        link.rect_norm = (x0, y0, x1, y1)
+                        toc_links.append(link)
             save_page(fig)
 
         # Compute page map before rendering (for TOC and links).
@@ -730,7 +739,7 @@ def render_report(
                     body_fontsize=7.3,
                     header_fontsize=7.6,
                     chars_per_col=[4, 27, 7, 5, 10, 8, 6, 4, 8, 10, 10, 10, 10, 10],
-                    col_widths=[0.03, 0.3525, 0.06, 0.028, 0.081, 0.07, 0.05, 0.03, 0.06, 0.051, 0.051, 0.051, 0.051, 0.0345],
+                    col_widths=[0.03, 0.336, 0.06, 0.028, 0.081, 0.07, 0.05, 0.03, 0.06, 0.051, 0.051, 0.051, 0.051, 0.051],
                     force_left_cols=[1],
                     link_targets=chunk_targets,
                     link_col_idx=1,
