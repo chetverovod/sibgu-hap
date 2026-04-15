@@ -462,6 +462,7 @@ def render_report(
             header_fontsize: float,
             chars_per_col: List[int],
             col_widths: Optional[List[float]] = None,
+            force_left_cols: Optional[List[int]] = None,
         ) -> None:
             ax.axis("off")
             ax.set_title(title, fontsize=13, pad=12)
@@ -515,6 +516,18 @@ def render_report(
                 row_h = row_heights[row_idx - 1]
                 for col_idx in range(n_cols):
                     table[(row_idx, col_idx)].set_height(row_h)
+
+            # Optional per-column hard left alignment.
+            if force_left_cols:
+                for col_idx in force_left_cols:
+                    if col_idx < 0 or col_idx >= n_cols:
+                        continue
+                    table[(0, col_idx)].set_text_props(ha="left")
+                    table[(0, col_idx)]._text.set_x(0.02)
+                    for row_idx in range(1, len(rows) + 1):
+                        cell = table[(row_idx, col_idx)]
+                        cell.set_text_props(ha="left")
+                        cell._text.set_x(0.02)
 
             fig.text(
                 PAGE_LEFT,
@@ -670,7 +683,8 @@ def render_report(
                     body_fontsize=7.3,
                     header_fontsize=7.6,
                     chars_per_col=[4, 27, 7, 5, 10, 8, 6, 4, 8, 10, 10, 10, 10, 10],
-                    col_widths=[0.03, 0.282, 0.06, 0.028, 0.081, 0.07, 0.05, 0.03, 0.06, 0.065, 0.065, 0.065, 0.065, 0.049],
+                    col_widths=[0.03, 0.3525, 0.06, 0.028, 0.081, 0.07, 0.05, 0.03, 0.06, 0.051, 0.051, 0.051, 0.051, 0.0345],
+                    force_left_cols=[1],
                 )
 
         if devices_table is not None:
