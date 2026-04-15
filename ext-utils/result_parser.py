@@ -63,6 +63,13 @@ class SatCoordinatesData:
 
 
 @dataclass
+class NodeCoordinatesData:
+    path: Path
+    kind: str
+    by_node_id: Dict[int, List[Tuple[float, float, float, float]]]  # node_id -> [(t, lat, lon, alt), ...]
+
+
+@dataclass
 class SummaryTable:
     header: List[str]
     rows: List[List[str]]
@@ -408,6 +415,39 @@ def parse_sat_coordinates(results_dir: Path) -> Optional[SatCoordinatesData]:
     return SatCoordinatesData(path=path, by_sat_id=by_sat_id)
 
 
+def parse_node_coordinates(
+    results_dir: Path,
+    filename: str,
+    kind: str,
+) -> Optional[NodeCoordinatesData]:
+    path = results_dir / filename
+    if not path.exists() or not path.is_file():
+        return None
+
+    by_node_id: Dict[int, List[Tuple[float, float, float, float]]] = {}
+    with path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("%"):
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            try:
+                t = float(parts[0])
+                node_id = int(parts[1])
+                lat = float(parts[2])
+                lon = float(parts[3])
+                alt = float(parts[4])
+            except ValueError:
+                continue
+            by_node_id.setdefault(node_id, []).append((t, lat, lon, alt))
+
+    if not by_node_id:
+        return None
+    return NodeCoordinatesData(path=path, kind=kind, by_node_id=by_node_id)
+
+
 def select_additional_satellite_maps(
     sat_coordinates: Optional[SatCoordinatesData],
     mode: str,
@@ -505,6 +545,8 @@ def render_report(
     stat_files: List[StatFile],
     xml_files: List[Path],
     sat_coordinates: Optional[SatCoordinatesData],
+    ut_coordinates: Optional[NodeCoordinatesData],
+    gw_coordinates: Optional[NodeCoordinatesData],
     additional_sat_map_ids: List[int],
     quiet_cartopy_download_warnings: bool,
     summary_table: Optional[SummaryTable],
@@ -773,15 +815,27 @@ def render_report(
             "Satellite coordinates file:",
             sat_coordinates.path.name if sat_coordinates else "Not found",
         )
+        add_rubric(
+            fig,
+            PAGE_TOP - 0.48,
+            "UT coordinates file:",
+            ut_coordinates.path.name if ut_coordinates else "Not found",
+        )
+        add_rubric(
+            fig,
+            PAGE_TOP - 0.53,
+            "GW coordinates file:",
+            gw_coordinates.path.name if gw_coordinates else "Not found",
+        )
         fig.text(
             PAGE_LEFT,
-            PAGE_TOP - 0.50,
+            PAGE_TOP - 0.60,
             "Each following page contains one graph and the source filename.",
             fontsize=10,
         )
         fig.text(
             PAGE_LEFT,
-            PAGE_TOP - 0.54,
+            PAGE_TOP - 0.64,
             "Files without data rows are skipped automatically.",
             fontsize=10,
         )
@@ -837,7 +891,7 @@ def render_report(
             save_page(fig)
 
         # Satellite coordinates map page(s) (after table of contents)
-        if sat_coordinates is not None:
+        if sat_coordinates is not None or ut_coordinates is not None or gw_coordinates is not None:
             cartopy_warning_printed = False
 
             def render_satellite_map_page(sat_ids: List[int], title: str) -> None:
@@ -851,6 +905,14 @@ def render_report(
                     pts = sat_coordinates.by_sat_id.get(sat_id, [])
                     all_lats.extend([p[1] for p in pts])
                     all_lons.extend([p[2] for p in pts])
+                if ut_coordinates is not None:
+                    for pts in ut_coordinates.by_node_id.values():
+                        all_lats.extend([p[1] for p in pts])
+                        all_lons.extend([p[2] for p in pts])
+                if gw_coordinates is not None:
+                    for pts in gw_coordinates.by_node_id.values():
+                        all_lats.extend([p[1] for p in pts])
+                        all_lons.extend([p[2] for p in pts])
 
                 lat_min = min(all_lats) if all_lats else -90.0
                 lat_max = max(all_lats) if all_lats else 90.0
@@ -929,6 +991,94 @@ def render_report(
                                 textcoords=ccrs.PlateCarree()._as_mpl_transform(ax),
                                 arrowprops=dict(arrowstyle="->", color="black", lw=1.0),
                             )
+                    if ut_coordinates is not None:
+                        for node_id in sorted(ut_coordinates.by_node_id.keys()):
+                            pts = ut_coordinates.by_node_id[node_id]
+                            lats = [p[1] for p in pts]
+                            lons = [p[2] for p in pts]
+                            alt_last = pts[-1][3] if pts else 0.0
+                            ax.plot(
+                                lons,
+                                lats,
+                                transform=ccrs.PlateCarree(),
+                                linewidth=1.0,
+                                linestyle="--",
+                                color="tab:blue",
+                                label=f"UT {node_id} ({alt_last:.0f} m)",
+                            )
+                            if lats and lons:
+                                ax.text(
+                                    lons[-1],
+                                    lats[-1],
+                                    f"UT {node_id}",
+                                    transform=ccrs.PlateCarree(),
+                                    fontsize=7.5,
+                                    ha="left",
+                                    va="bottom",
+                                    color="tab:blue",
+                                )
+                                if len(lats) >= 2 and (lats[-2] != lats[-1] or lons[-2] != lons[-1]):
+                                    ax.annotate(
+                                        "",
+                                        xy=(lons[-1], lats[-1]),
+                                        xytext=(lons[-2], lats[-2]),
+                                        xycoords=ccrs.PlateCarree()._as_mpl_transform(ax),
+                                        textcoords=ccrs.PlateCarree()._as_mpl_transform(ax),
+                                        arrowprops=dict(arrowstyle="->", color="tab:blue", lw=0.9),
+                                    )
+                                else:
+                                    ax.plot(
+                                        [lons[-1]],
+                                        [lats[-1]],
+                                        marker="o",
+                                        markersize=3.5,
+                                        color="tab:blue",
+                                        transform=ccrs.PlateCarree(),
+                                    )
+                    if gw_coordinates is not None:
+                        for node_id in sorted(gw_coordinates.by_node_id.keys()):
+                            pts = gw_coordinates.by_node_id[node_id]
+                            lats = [p[1] for p in pts]
+                            lons = [p[2] for p in pts]
+                            alt_last = pts[-1][3] if pts else 0.0
+                            ax.plot(
+                                lons,
+                                lats,
+                                transform=ccrs.PlateCarree(),
+                                linewidth=1.0,
+                                linestyle=":",
+                                color="tab:green",
+                                label=f"GW {node_id} ({alt_last:.0f} m)",
+                            )
+                            if lats and lons:
+                                ax.text(
+                                    lons[-1],
+                                    lats[-1],
+                                    f"GW {node_id}",
+                                    transform=ccrs.PlateCarree(),
+                                    fontsize=7.5,
+                                    ha="left",
+                                    va="bottom",
+                                    color="tab:green",
+                                )
+                                if len(lats) >= 2 and (lats[-2] != lats[-1] or lons[-2] != lons[-1]):
+                                    ax.annotate(
+                                        "",
+                                        xy=(lons[-1], lats[-1]),
+                                        xytext=(lons[-2], lats[-2]),
+                                        xycoords=ccrs.PlateCarree()._as_mpl_transform(ax),
+                                        textcoords=ccrs.PlateCarree()._as_mpl_transform(ax),
+                                        arrowprops=dict(arrowstyle="->", color="tab:green", lw=0.9),
+                                    )
+                                else:
+                                    ax.plot(
+                                        [lons[-1]],
+                                        [lats[-1]],
+                                        marker="s",
+                                        markersize=3.5,
+                                        color="tab:green",
+                                        transform=ccrs.PlateCarree(),
+                                    )
                     map_rendered = True
                 except Exception:
                     if not cartopy_warning_printed:
@@ -978,6 +1128,72 @@ def render_report(
                                 xytext=(lons[i0], lats[i0]),
                                 arrowprops=dict(arrowstyle="->", color="black", lw=1.0),
                             )
+                    if ut_coordinates is not None:
+                        for node_id in sorted(ut_coordinates.by_node_id.keys()):
+                            pts = ut_coordinates.by_node_id[node_id]
+                            lats = [p[1] for p in pts]
+                            lons = [p[2] for p in pts]
+                            alt_last = pts[-1][3] if pts else 0.0
+                            ax.plot(
+                                lons,
+                                lats,
+                                linewidth=1.0,
+                                linestyle="--",
+                                color="tab:blue",
+                                label=f"UT {node_id} ({alt_last:.0f} m)",
+                            )
+                            if lats and lons:
+                                ax.text(
+                                    lons[-1],
+                                    lats[-1],
+                                    f"UT {node_id}",
+                                    fontsize=7.5,
+                                    ha="left",
+                                    va="bottom",
+                                    color="tab:blue",
+                                )
+                                if len(lats) >= 2 and (lats[-2] != lats[-1] or lons[-2] != lons[-1]):
+                                    ax.annotate(
+                                        "",
+                                        xy=(lons[-1], lats[-1]),
+                                        xytext=(lons[-2], lats[-2]),
+                                        arrowprops=dict(arrowstyle="->", color="tab:blue", lw=0.9),
+                                    )
+                                else:
+                                    ax.plot([lons[-1]], [lats[-1]], marker="o", markersize=3.5, color="tab:blue")
+                    if gw_coordinates is not None:
+                        for node_id in sorted(gw_coordinates.by_node_id.keys()):
+                            pts = gw_coordinates.by_node_id[node_id]
+                            lats = [p[1] for p in pts]
+                            lons = [p[2] for p in pts]
+                            alt_last = pts[-1][3] if pts else 0.0
+                            ax.plot(
+                                lons,
+                                lats,
+                                linewidth=1.0,
+                                linestyle=":",
+                                color="tab:green",
+                                label=f"GW {node_id} ({alt_last:.0f} m)",
+                            )
+                            if lats and lons:
+                                ax.text(
+                                    lons[-1],
+                                    lats[-1],
+                                    f"GW {node_id}",
+                                    fontsize=7.5,
+                                    ha="left",
+                                    va="bottom",
+                                    color="tab:green",
+                                )
+                                if len(lats) >= 2 and (lats[-2] != lats[-1] or lons[-2] != lons[-1]):
+                                    ax.annotate(
+                                        "",
+                                        xy=(lons[-1], lats[-1]),
+                                        xytext=(lons[-2], lats[-2]),
+                                        arrowprops=dict(arrowstyle="->", color="tab:green", lw=0.9),
+                                    )
+                                else:
+                                    ax.plot([lons[-1]], [lats[-1]], marker="s", markersize=3.5, color="tab:green")
                     ax.text(
                         0.5,
                         0.01,
@@ -995,8 +1211,12 @@ def render_report(
                     PAGE_LEFT,
                     PAGE_BOTTOM + 0.003,
                     (
-                        f"Source: {sat_coordinates.path.name} | satellites: "
-                        f"{len(sat_ids)} | "
+                        f"Source: {sat_coordinates.path.name}; "
+                        f"{ut_coordinates.path.name if ut_coordinates else 'UT: N/A'}; "
+                        f"{gw_coordinates.path.name if gw_coordinates else 'GW: N/A'} | "
+                        f"satellites: {len(sat_ids)} | "
+                        f"ut: {len(ut_coordinates.by_node_id) if ut_coordinates else 0} | "
+                        f"gw: {len(gw_coordinates.by_node_id) if gw_coordinates else 0} | "
                         f"map: {'cartopy bw' if map_rendered else 'fallback lon/lat'}"
                     ),
                     fontsize=8.5,
@@ -1006,12 +1226,13 @@ def render_report(
                 fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
                 save_page(fig)
 
-            render_satellite_map_page(
-                sorted(sat_coordinates.by_sat_id.keys()),
-                "Satellite coordinates over world map",
-            )
-            for sat_id in additional_sat_map_ids:
-                render_satellite_map_page([sat_id], f"Satellite trajectory map: sat {sat_id}")
+            if sat_coordinates is not None:
+                render_satellite_map_page(
+                    sorted(sat_coordinates.by_sat_id.keys()),
+                    "Satellite coordinates over world map",
+                )
+                for sat_id in additional_sat_map_ids:
+                    render_satellite_map_page([sat_id], f"Satellite trajectory map: sat {sat_id}")
 
         if summary_table is not None:
             for chunk_start in range(0, len(summary_table.rows), rows_per_summary_page):
@@ -1220,6 +1441,8 @@ def main() -> None:
     stat_files = collect_stat_files(results_dir)
     xml_files = find_xml_files(results_dir)
     sat_coordinates = parse_sat_coordinates(results_dir)
+    ut_coordinates = parse_node_coordinates(results_dir, "UtCoordinates.log", "UT")
+    gw_coordinates = parse_node_coordinates(results_dir, "GwCoordinates.log", "GW")
     additional_sat_map_ids = select_additional_satellite_maps(
         sat_coordinates,
         args.satellite_maps,
@@ -1234,10 +1457,13 @@ def main() -> None:
         and devices_table is None
         and packet_trace_table is None
         and sat_coordinates is None
+        and ut_coordinates is None
+        and gw_coordinates is None
     ):
         raise SystemExit(
             "No non-empty stat-*.txt files found, DevicesTable.txt missing/empty, and "
-            "PacketTrace.log missing/empty, and SatCoordinates.log missing/empty."
+            "PacketTrace.log missing/empty, and SatCoordinates.log/UtCoordinates.log/"
+            "GwCoordinates.log missing/empty."
         )
 
     render_report(
@@ -1246,6 +1472,8 @@ def main() -> None:
         stat_files,
         xml_files,
         sat_coordinates,
+        ut_coordinates,
+        gw_coordinates,
         additional_sat_map_ids,
         args.quiet_cartopy_download_warnings == "on",
         summary_table,
