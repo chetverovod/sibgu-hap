@@ -56,6 +56,12 @@ class PacketTraceTable:
 
 
 @dataclass
+class SatCoordinatesData:
+    path: Path
+    by_sat_id: Dict[int, List[Tuple[float, float, float]]]  # sat_id -> [(t, lat, lon), ...]
+
+
+@dataclass
 class SummaryTable:
     header: List[str]
     rows: List[List[str]]
@@ -344,6 +350,34 @@ def parse_packet_trace(results_dir: Path) -> Optional[PacketTraceTable]:
     return PacketTraceTable(path=path, header=header, rows=active_rows)
 
 
+def parse_sat_coordinates(results_dir: Path) -> Optional[SatCoordinatesData]:
+    path = results_dir / "SatCoordinates.log"
+    if not path.exists() or not path.is_file():
+        return None
+
+    by_sat_id: Dict[int, List[Tuple[float, float, float]]] = {}
+    with path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("%"):
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            try:
+                t = float(parts[0])
+                sat_id = int(parts[1])
+                lat = float(parts[2])
+                lon = float(parts[3])
+            except ValueError:
+                continue
+            by_sat_id.setdefault(sat_id, []).append((t, lat, lon))
+
+    if not by_sat_id:
+        return None
+    return SatCoordinatesData(path=path, by_sat_id=by_sat_id)
+
+
 def build_summary_table(stat_files: List[StatFile]) -> Optional[SummaryTable]:
     if not stat_files:
         return None
@@ -402,6 +436,7 @@ def render_report(
     results_dir: Path,
     stat_files: List[StatFile],
     xml_files: List[Path],
+    sat_coordinates: Optional[SatCoordinatesData],
     summary_table: Optional[SummaryTable],
     devices_table: Optional[DevicesTable],
     packet_trace_table: Optional[PacketTraceTable],
@@ -594,6 +629,7 @@ def render_report(
         toc_entries: List[Tuple[str, int]] = []
         toc_entries.append(("Preamble", 1))
 
+        sat_map_pages = 1 if sat_coordinates is not None else 0
         devices_pages = 0
         summary_pages = 0
         if summary_table is not None:
@@ -606,6 +642,8 @@ def render_report(
         stat_pages = len(stat_files)
 
         dynamic_entries_count = 0
+        if sat_map_pages > 0:
+            dynamic_entries_count += 1
         if devices_pages > 0:
             dynamic_entries_count += 1
         if packet_pages > 0:
@@ -617,6 +655,9 @@ def render_report(
         first_content_page = 2 + toc_pages
 
         page_cursor = first_content_page
+        if sat_map_pages > 0:
+            toc_entries.append(("Satellite coordinates map", page_cursor))
+            page_cursor += sat_map_pages
         stat_page_map: Dict[str, int] = {}
         if summary_pages > 0:
             toc_entries.append(("Key metrics summary table", page_cursor))
@@ -653,15 +694,21 @@ def render_report(
             "Packet trace file:",
             packet_trace_table.path.name if packet_trace_table else "Not found",
         )
+        add_rubric(
+            fig,
+            PAGE_TOP - 0.43,
+            "Satellite coordinates file:",
+            sat_coordinates.path.name if sat_coordinates else "Not found",
+        )
         fig.text(
             PAGE_LEFT,
-            PAGE_TOP - 0.45,
+            PAGE_TOP - 0.50,
             "Each following page contains one graph and the source filename.",
             fontsize=10,
         )
         fig.text(
             PAGE_LEFT,
-            PAGE_TOP - 0.49,
+            PAGE_TOP - 0.54,
             "Files without data rows are skipped automatically.",
             fontsize=10,
         )
@@ -714,6 +761,83 @@ def render_report(
                 color="dimgray",
             )
             fig.subplots_adjust(left=PAGE_LEFT, right=PAGE_RIGHT, top=PAGE_TOP, bottom=PAGE_BOTTOM)
+            save_page(fig)
+
+        # Satellite coordinates map page (after table of contents)
+        if sat_coordinates is not None:
+            fig = plt.figure(figsize=(11.69, 8.27))
+            map_rendered = False
+            try:
+                import cartopy.crs as ccrs
+                import cartopy.feature as cfeature
+
+                ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
+                ax.set_global()
+                ax.add_feature(cfeature.OCEAN, facecolor="white", edgecolor="none")
+                ax.add_feature(cfeature.LAND, facecolor="0.9", edgecolor="black", linewidth=0.3)
+                ax.coastlines(color="black", linewidth=0.5)
+                ax.gridlines(
+                    draw_labels=False,
+                    color="0.6",
+                    linewidth=0.4,
+                    alpha=0.5,
+                    linestyle="--",
+                )
+                for sat_id in sorted(sat_coordinates.by_sat_id.keys()):
+                    pts = sat_coordinates.by_sat_id[sat_id]
+                    lats = [p[1] for p in pts]
+                    lons = [p[2] for p in pts]
+                    ax.plot(
+                        lons,
+                        lats,
+                        transform=ccrs.PlateCarree(),
+                        linewidth=1.0,
+                        label=f"sat {sat_id}",
+                    )
+                map_rendered = True
+            except Exception:
+                print(
+                    "[WARNING] cartopy is not installed (or failed to import). "
+                    "Using fallback lon/lat plot without coastline map. "
+                    "Install with: pip install cartopy"
+                )
+                ax = fig.add_subplot(1, 1, 1)
+                ax.set_xlim(-180, 180)
+                ax.set_ylim(-90, 90)
+                ax.set_xlabel("Longitude (deg)")
+                ax.set_ylabel("Latitude (deg)")
+                ax.grid(True, linestyle="--", color="0.6", linewidth=0.4, alpha=0.6)
+                for sat_id in sorted(sat_coordinates.by_sat_id.keys()):
+                    pts = sat_coordinates.by_sat_id[sat_id]
+                    lats = [p[1] for p in pts]
+                    lons = [p[2] for p in pts]
+                    ax.plot(lons, lats, linewidth=1.0, label=f"sat {sat_id}")
+                ax.text(
+                    0.5,
+                    0.01,
+                    "Cartopy not available: showing lon/lat trajectories without coastline layer.",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="bottom",
+                    fontsize=8.5,
+                    color="dimgray",
+                )
+
+            ax.set_title("Satellite coordinates over world map", fontsize=13, pad=12)
+            ax.legend(loc="lower left", fontsize=8, frameon=True)
+            fig.text(
+                PAGE_LEFT,
+                PAGE_BOTTOM + 0.003,
+                (
+                    f"Source: {sat_coordinates.path.name} | satellites: "
+                    f"{len(sat_coordinates.by_sat_id)} | "
+                    f"map: {'cartopy bw' if map_rendered else 'fallback lon/lat'}"
+                ),
+                fontsize=8.5,
+                va="bottom",
+                family="monospace",
+            )
+            fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
             save_page(fig)
 
         if summary_table is not None:
@@ -914,14 +1038,20 @@ def main() -> None:
 
     stat_files = collect_stat_files(results_dir)
     xml_files = find_xml_files(results_dir)
+    sat_coordinates = parse_sat_coordinates(results_dir)
     summary_table = build_summary_table(stat_files)
     devices_table = parse_devices_table(results_dir)
     packet_trace_table = parse_packet_trace(results_dir)
 
-    if not stat_files and devices_table is None and packet_trace_table is None:
+    if (
+        not stat_files
+        and devices_table is None
+        and packet_trace_table is None
+        and sat_coordinates is None
+    ):
         raise SystemExit(
             "No non-empty stat-*.txt files found, DevicesTable.txt missing/empty, and "
-            "PacketTrace.log missing/empty."
+            "PacketTrace.log missing/empty, and SatCoordinates.log missing/empty."
         )
 
     render_report(
@@ -929,6 +1059,7 @@ def main() -> None:
         results_dir,
         stat_files,
         xml_files,
+        sat_coordinates,
         summary_table,
         devices_table,
         packet_trace_table,
