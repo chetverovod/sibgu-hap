@@ -457,6 +457,8 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::SatOrbiterMac::DisableSchedulingIfNoDeviceConnected", BooleanValue(true));
     Config::SetDefault("ns3::SatEnvVariables::EnableSimulationOutputOverwrite", BooleanValue(true));
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(true));
+    Config::SetDefault("ns3::SatEnvVariables::DataPath",
+                       StringValue("contrib/sibgu-hap/data"));
 
 
     float simulationDuration = 2.0; // seconds
@@ -478,6 +480,10 @@ main(int argc, char* argv[])
     Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>(simulationName);
     simulationHelper->AddDefaultUiArguments(cmd); // Adds default UI arguments (simulation time, etc.)
     cmd.Parse(argc, argv); // Parses command-line arguments  
+    std::string fixedOutputDir =
+        SystemPath::Append("contrib/sibgu-hap/data/sims", simulationName + "/");
+    SystemPath::MakeDirectories(fixedOutputDir);
+    simulationHelper->SetOutputPath(fixedOutputDir);
     simulationHelper->SetSimulationTime(Seconds(simulationDuration));
     uint32_t utUsers = 1;
     simulationHelper->SetGwUserCount(utUsers);
@@ -498,8 +504,7 @@ main(int argc, char* argv[])
     simulationHelper->LoadScenario(scenarioName);
 
     simulationHelper->CreateSatScenario(SatHelper::NONE);
-    std::string dataPath = Singleton<SatEnvVariables>::Get()->GetDataPath();
-    std::string outputDir = SystemPath::Append(dataPath, "sims/" + simulationName);
+    std::string outputDir = Singleton<SatEnvVariables>::Get()->GetOutputPath();
     SystemPath::MakeDirectories(outputDir);
 
     NS_LOG_UNCOND("Output directory set to: " << outputDir);
