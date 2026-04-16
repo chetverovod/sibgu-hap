@@ -81,6 +81,7 @@ build_lib_example(
     NAME sat-handover-pcap
     SOURCE_FILES sat-handover-pcap.cc
                  ../stats/device-ip-table.cc
+                 ../stats/pcap-node-tracing.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
                        ${libinternet}
                        ${libwifi}
@@ -93,6 +94,7 @@ build_lib_example(
     NAME sat-handover-hap
     SOURCE_FILES sat-handover-hap.cc
                  ../stats/device-ip-table.cc
+                 ../stats/pcap-node-tracing.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
                        ${libinternet}
                        ${libwifi}

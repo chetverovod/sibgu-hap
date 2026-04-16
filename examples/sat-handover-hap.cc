@@ -35,16 +35,13 @@
 #include "ns3/satellite-sgp4-mobility-model.h"
 #include "ns3/satellite-traced-mobility-model.h"
 #include "../stats/device-ip-table.h"
+#include "../stats/pcap-node-tracing.h"
 #include <fstream>
-#include <iomanip> 
 #include <sstream> 
 #include <tuple>
 #include <vector>
 
 using namespace ns3;
-
-bool enablePcap = false;
-bool enableHexDump = false;
 
 NS_LOG_COMPONENT_DEFINE("sat-handover-hap");
 
@@ -122,237 +119,6 @@ ValidateOrbiterTrajectories(const std::string& scenarioName, Ptr<SatTopology> to
 }
 
 // ============================================================================
-// PCAP коллбэки
-// ============================================================================
-
-static void
-PcapTxSink(Ptr<PcapFileWrapper> file, Ptr<const Packet> packet)
-{
-    file->Write(Simulator::Now(), packet);
-}
-
-static void
-PcapRxSink(Ptr<PcapFileWrapper> file, Ptr<const Packet> packet, const Address& from)
-{
-    file->Write(Simulator::Now(), packet);
-}
-
-// ============================================================================
-// Hex-dump коллбэки
-// ============================================================================
-
-static void
-HexDumpTx(Ptr<const Packet> packet)
-{
-    uint32_t dumpLen = std::min(packet->GetSize(), (uint32_t)128);
-    uint8_t buffer[128];
-    packet->CopyData(buffer, dumpLen);
-
-    std::ostringstream oss;
-    oss << Simulator::Now().GetSeconds() << "s TX UID=" << packet->GetUid()
-        << " Size=" << packet->GetSize() << " bytes" << std::endl;
-
-    // Заголовки
-    std::ostringstream h;
-    packet->Print(h);
-    if (!h.str().empty())
-    {
-        oss << "  Headers: " << h.str() << std::endl;
-    }
-
-    // Hex
-    oss << "   Hex: ";
-    for (uint32_t i = 0; i < dumpLen; ++i)
-    {
-        oss << std::hex << std::setfill('0') << std::setw(2) << (uint32_t)buffer[i] << " ";
-        if ((i + 1) % 16 == 0) oss << std::endl << "        ";
-    }
-    oss << std::dec;
-    NS_LOG_UNCOND(oss.str());
-}
-
-static void
-HexDumpRx(Ptr<const Packet> packet, const Address& from)
-{
-    uint32_t dumpLen = std::min(packet->GetSize(), (uint32_t)128);
-    uint8_t buffer[128];
-    packet->CopyData(buffer, dumpLen);
-
-    std::ostringstream oss;
-    oss << Simulator::Now().GetSeconds() << "s RX UID=" << packet->GetUid()
-        << " Size=" << packet->GetSize()
-        << " From=";
-    if (Mac48Address::IsMatchingType(from))
-    {
-        oss << Mac48Address::ConvertFrom(from);
-    }
-    else
-    {
-        oss << from;  // запасной вариант
-    }
-    oss << std::endl;
-            
-    oss << "   Hex: ";
-    for (uint32_t i = 0; i < dumpLen; ++i)
-    {
-        oss << std::hex << std::setfill('0') << std::setw(2) << (uint32_t)buffer[i] << " ";
-        if ((i + 1) % 16 == 0) oss << std::endl << "        ";
-    }
-    oss << std::dec;
-    NS_LOG_UNCOND(oss.str());
-}
-
-// ============================================================================
-// PCAP коллбэк для стандартных устройств (Csma, P2P)
-// ============================================================================
-
-static void
-PcapSniffSink(Ptr<PcapFileWrapper> file, Ptr<const Packet> packet)
-{
-    file->Write(Simulator::Now(), packet);
-}
-
-// ============================================================================
-// EnablePcapForNodeContainer
-// ============================================================================
-void
-EnablePcapForNodeContainer(NodeContainer nodes, std::string prefix, 
-    std::string outputDir, std::string role)
-{
-    PcapHelper pcapHelper;
-
-    for (uint32_t i = 0; i < nodes.GetN(); ++i)
-    {
-        Ptr<Node> node = nodes.Get(i);
-
-        for (uint32_t j = 0; j < node->GetNDevices(); ++j)
-        {
-            Ptr<NetDevice> dev = node->GetDevice(j);
-            std::string typeName = dev->GetInstanceTypeId().GetName();
-
-            if (typeName == "ns3::LoopbackNetDevice")
-            {
-                continue;
-            }
-
-            std::string devLabel = prefix + "-node" + std::to_string(node->GetId())
-                                   + "-dev" + std::to_string(j);
-
-            // 2) SatOrbiterNetDevice
-            SatOrbiterNetDevice* orbDev = dynamic_cast<SatOrbiterNetDevice*>(PeekPointer(dev));
-            if (orbDev)
-            {
-                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
-                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_RAW);
-
-                orbDev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file));
-                orbDev->TraceConnectWithoutContext("RxFeeder", MakeBoundCallback(&PcapRxSink, file));
-                orbDev->TraceConnectWithoutContext("RxUser", MakeBoundCallback(&PcapRxSink, file));
-
-                // Отключаем hex-dump для RxFeeder и RxUser чтобы сэкономить память
-                // Это может быть полезно для больших сетей или длительных симуляций
-                if (enableHexDump)
-                {
-                    orbDev->TraceConnectWithoutContext("Tx", MakeCallback(&HexDumpTx));
-                    orbDev->TraceConnectWithoutContext("RxFeeder", MakeCallback(&HexDumpRx));
-                    orbDev->TraceConnectWithoutContext("RxUser", MakeCallback(&HexDumpRx));
-                }
-                
-                NS_LOG_UNCOND("PCAP (SatOrbiterNetDevice): " << fullPath);
-                continue;
-            }
-
-            // 3) SatNetDevice
-            SatNetDevice* satDev = dynamic_cast<SatNetDevice*>(PeekPointer(dev));
-            if (satDev)
-            {
-                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
-                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_RAW);
-
-                satDev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file));
-                satDev->TraceConnectWithoutContext("Rx", MakeBoundCallback(&PcapRxSink, file));
-                if (enableHexDump)
-                {
-                satDev->TraceConnectWithoutContext("Tx", MakeCallback(&HexDumpTx));
-                satDev->TraceConnectWithoutContext("Rx", MakeCallback(&HexDumpRx));
-                }
-                NS_LOG_UNCOND("PCAP (SatNetDevice): " << fullPath);
-                continue;
-            }
-
-            // 4) CsmaNetDevice
-            if (typeName == "ns3::CsmaNetDevice")
-            {
-                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
-                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_EN10MB);
-
-                //dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapSniffSink, file));
-                //dev->TraceConnectWithoutContext("MacTx", MakeBoundCallback(&PcapSniffSink, file));
-                dev->TraceConnectWithoutContext("PromiscSniffer", MakeBoundCallback(&PcapSniffSink, file));
-                NS_LOG_UNCOND("PCAP (CsmaNetDevice): " << fullPath);
-                continue;
-            }
-
-            // 5) PointToPointIslNetDevice
-            if (typeName == "ns3::PointToPointIslNetDevice")
-            {
-                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
-                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_RAW);
-
-                bool connected = false;
-
-                // Пробуем типичные packet-trace источники для point-to-point классов.
-                connected = dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("Rx", MakeBoundCallback(&PcapRxSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("MacTx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("MacRx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("Sniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("PromiscSniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-
-                if (connected)
-                {
-                    NS_LOG_UNCOND("PCAP (PointToPointIslNetDevice): " << fullPath);
-                }
-                else
-                {
-                    NS_LOG_UNCOND("SKIP (PointToPointIslNetDevice,no-trace): " << devLabel);
-                }
-                continue;
-            }
-
-            // 6) SatSimpleNetDevice
-            if (typeName == "ns3::SatSimpleNetDevice")
-            {
-                std::string fullPath = SystemPath::Append(outputDir, devLabel + ".pcap");
-                Ptr<PcapFileWrapper> file = pcapHelper.CreateFile(fullPath, std::ios::out, PcapHelper::DLT_RAW);
-
-                bool connected = false;
-
-                // Пробуем типичные packet-trace источники.
-                connected = dev->TraceConnectWithoutContext("Tx", MakeBoundCallback(&PcapTxSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("Rx", MakeBoundCallback(&PcapRxSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("MacTx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("MacRx", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("Sniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-                connected = dev->TraceConnectWithoutContext("PromiscSniffer", MakeBoundCallback(&PcapSniffSink, file)) || connected;
-
-                if (connected)
-                {
-                    NS_LOG_UNCOND("PCAP (SatSimpleNetDevice): " << fullPath);
-                }
-                else
-                {
-                    NS_LOG_UNCOND("SKIP (SatSimpleNetDevice,no-trace): " << devLabel);
-                }
-                continue;
-            }
-
-            NS_LOG_UNCOND("SKIP (unknown/unsupported): " << devLabel << " Type=" << typeName);
-        }
-    }
-}
-
-// ============================================================================
 // main
 // ============================================================================
 int
@@ -378,6 +144,8 @@ main(int argc, char* argv[])
     std::string scenarioName = "constellation-leo-3-satellites-hap";
     uint32_t packetSize = 512; // Packet size in bytes
     float interval = 100.0; // Time interval between CBR packets in milliseconds
+    bool enablePcap = false;
+    bool enableHexDump = false;
     
 
     // Declare command line arguments
@@ -443,12 +211,13 @@ main(int argc, char* argv[])
     // PCAP for all nodes
     if (enablePcap)
     {
-    EnablePcapForNodeContainer(topology->GetGwNodes(), "sat-handover-gw", 
-    outputDir, "GW");
-    EnablePcapForNodeContainer(topology->GetOrbiterNodes(), "sat-handover-orbiter",
-    outputDir, "SAT");
-    EnablePcapForNodeContainer(topology->GetUtNodes(), "sat-handover-ut",
-    outputDir, "UT");
+    EnablePcapForNodeContainer(topology->GetGwNodes(), "sat-handover-gw", outputDir, "GW", enableHexDump);
+    EnablePcapForNodeContainer(topology->GetOrbiterNodes(),
+                               "sat-handover-orbiter",
+                               outputDir,
+                               "SAT",
+                               enableHexDump);
+    EnablePcapForNodeContainer(topology->GetUtNodes(), "sat-handover-ut", outputDir, "UT", enableHexDump);
     }
 
     // ========================================================================
