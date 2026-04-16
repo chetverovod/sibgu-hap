@@ -1,6 +1,6 @@
 /* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
- * Copyright (c) 2014 Magister Solutions
+ * Copyright (c) 2026 Reshetnev University
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -15,7 +15,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
- * Author: Bastien TAURAN <bastien.tauran@viveris.fr>
+ * Author: Igor Plastov <chetverovod@gmail.com> Reshetnev University
  *
  */
 
@@ -119,7 +119,7 @@ main(int argc, char* argv[])
     ValidateOrbiterTrajectories(scenarioName, topology);
 
     // ========================================================================
-    // Единая таблица соответствий устройств и IP адресов для всех ролей
+    // Unified device-to-IP mapping table for all roles
     // ========================================================================
     std::vector<std::tuple<uint32_t, std::string, uint32_t,
                 std::string, std::string>> ipRows;
@@ -130,7 +130,7 @@ main(int argc, char* argv[])
     SaveDeviceIpTableToFile(ipRows, SystemPath::Append(outputDir, "DevicesTable.txt"));
 
     // ========================================================================
-    // PCAP для всех нод
+    // PCAP for all nodes
     // ========================================================================
    
     // PCAP for all nodes
