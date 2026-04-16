@@ -94,6 +94,7 @@ build_lib_example(
     NAME sat-handover-hap
     SOURCE_FILES sat-handover-hap.cc
                  ../stats/device-ip-table.cc
+                 ../model/orbiter-trajectory-validation.cc
                  ../stats/pcap-node-tracing.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
                        ${libinternet}
