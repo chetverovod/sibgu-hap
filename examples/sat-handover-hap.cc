@@ -35,6 +35,7 @@
 #include "../stats/device-ip-table.h"
 #include "../model/orbiter-trajectory-validation.h"
 #include "../stats/pcap-node-tracing.h"
+#include <chrono>
 #include <sstream> 
 #include <tuple>
 #include <vector>
@@ -180,9 +181,14 @@ main(int argc, char* argv[])
     s->AddPerBeamFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
     s->AddPerBeamBeamServiceTime(SatStatsHelper::OUTPUT_SCALAR_FILE);
     simulationHelper->EnableProgressLogs();
-   
 
+    const auto simulationStart = std::chrono::steady_clock::now();
     simulationHelper->RunSimulation();
+    const auto simulationEnd = std::chrono::steady_clock::now();
+    const auto simulationElapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(simulationEnd - simulationStart);
+    NS_LOG_UNCOND("Simulation wall-clock time: " << (simulationElapsed.count() / 1000.0)
+                                                 << " s");
 
     return 0;
 }

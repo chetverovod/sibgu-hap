@@ -34,6 +34,7 @@
 #include "ns3/satellite-enums.h"
 #include "../stats/device-ip-table.h"
 #include "../stats/pcap-node-tracing.h"
+#include <chrono>
 #include <tuple>
 #include <vector>
 
@@ -142,7 +143,13 @@ main(int argc, char* argv[])
     s->AddPerBeamBeamServiceTime(SatStatsHelper::OUTPUT_SCALAR_FILE);
 
     simulationHelper->EnableProgressLogs();
+    const auto simulationStart = std::chrono::steady_clock::now();
     simulationHelper->RunSimulation();
+    const auto simulationEnd = std::chrono::steady_clock::now();
+    const auto simulationElapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(simulationEnd - simulationStart);
+    NS_LOG_UNCOND("Simulation wall-clock time: " << (simulationElapsed.count() / 1000.0)
+                                                 << " s");
 
     return 0;
 }
