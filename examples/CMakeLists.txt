@@ -91,6 +91,7 @@ build_lib_example(
 build_lib_example(
     NAME sat-handover-hap
     SOURCE_FILES sat-handover-hap.cc
+                 ../stats/device-ip-table.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
                        ${libinternet}
                        ${libwifi}
