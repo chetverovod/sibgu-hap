@@ -32,6 +32,7 @@
 #include "ns3/satellite-net-device.h"
 #include "ns3/satellite-typedefs.h"
 #include "ns3/satellite-enums.h"
+#include "../stats/device-ip-table.h"
 #include <iomanip> 
 #include <sstream> 
 #include <tuple>
@@ -130,71 +131,6 @@ static void
 PcapSniffSink(Ptr<PcapFileWrapper> file, Ptr<const Packet> packet)
 {
     file->Write(Simulator::Now(), packet);
-}
-
-// ============================================================================
-// Функция для печати таблицы IP-адресов (с указанием роли узла: GW, UT, SAT)
-// ============================================================================
-static void
-CollectDeviceIpRows(NodeContainer nodes,
-                    const std::string& role,
-                    std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>>& rows)
-{
-    for (uint32_t i = 0; i < nodes.GetN(); ++i)
-    {
-        Ptr<Node> node = nodes.Get(i);
-
-        for (uint32_t j = 0; j < node->GetNDevices(); ++j)
-        {
-            Ptr<NetDevice> dev = node->GetDevice(j);
-            std::string typeName = dev->GetInstanceTypeId().GetName();
-
-            if (typeName == "ns3::LoopbackNetDevice")
-            {
-                continue;
-            }
-
-            std::string ipAddr = "N/A";
-            
-            // Получаем IP стек
-            Ptr<Ipv4> ipStack = node->GetObject<Ipv4>();
-            
-            if (ipStack)
-            {
-                int32_t interfaceIndex = ipStack->GetInterfaceForDevice(dev);
-                if (interfaceIndex >= 0 && ipStack->GetNAddresses(interfaceIndex) > 0)
-                {
-                    Ipv4InterfaceAddress ifaceAddr = ipStack->GetAddress(interfaceIndex, 0);
-                    
-                    // Форматируем IP в строку
-                    std::ostringstream ipStream;
-                    ipStream << ifaceAddr.GetLocal();
-                    ipAddr = ipStream.str();
-                }
-            }
-
-            rows.emplace_back(node->GetId(), role, j, typeName, ipAddr);
-        }
-    }
-}
-
-static void
-PrintDeviceIpTable(const std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>>& rows)
-{
-    std::cout << std::endl;
-    std::cout << "====================================================================================" << std::endl;
-    std::cout << "| Node ID | Role | Dev ID | Type                          | IP Address             |" << std::endl;
-    std::cout << "====================================================================================" << std::endl;
-    for (const auto& row : rows)
-    {
-        std::cout << "| " << std::setw(7) << std::get<0>(row)
-                  << " | " << std::setw(4) << std::get<1>(row)
-                  << " | " << std::setw(6) << std::get<2>(row)
-                  << " | " << std::setw(29) << std::get<3>(row)
-                  << " | " << std::setw(22) << std::get<4>(row) << " |" << std::endl;
-    }
-    std::cout << "====================================================================================" << std::endl;
-    std::cout << std::endl;
 }
 
 // ============================================================================
@@ -381,11 +317,12 @@ main(int argc, char* argv[])
     // ========================================================================
     // Единая таблица соответствий устройств и IP адресов для всех ролей
     // ========================================================================
-    std::vector<std::tuple<uint32_t, std::string, uint32_t, std::string, std::string>> ipRows;
+    std::vector<DeviceIpRow> ipRows;
     CollectDeviceIpRows(topology->GetGwNodes(), "GW", ipRows);
     CollectDeviceIpRows(topology->GetOrbiterNodes(), "SAT", ipRows);
     CollectDeviceIpRows(topology->GetUtNodes(), "UT", ipRows);
     PrintDeviceIpTable(ipRows);
+    SaveDeviceIpTableToFile(ipRows, SystemPath::Append(outputDir, "DevicesTable.txt"));
 
     // ========================================================================
     // PCAP для всех нод

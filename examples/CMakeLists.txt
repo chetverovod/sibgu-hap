@@ -80,6 +80,7 @@ build_lib_example(
 build_lib_example(
     NAME sat-handover-pcap
     SOURCE_FILES sat-handover-pcap.cc
+                 ../stats/device-ip-table.cc
     LIBRARIES_TO_LINK  ${libsibgu-hap}
                        ${libinternet}
                        ${libwifi}
