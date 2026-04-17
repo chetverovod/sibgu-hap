@@ -55,6 +55,8 @@ class PacketTraceTable:
     path: Path
     header: List[str]
     rows: List[List[str]]
+    dropped_header: List[str]
+    dropped_rows: List[List[str]]
 
 
 @dataclass
@@ -344,6 +346,7 @@ def parse_packet_trace(results_dir: Path) -> Optional[PacketTraceTable]:
     levels = ("ND", "LLC", "MAC", "PHY", "CH")
     level_set = set(levels)
     device_stats: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+    dropped_rows: List[List[str]] = []
 
     with path.open("r", encoding="utf-8") as f:
         for raw_line in f:
@@ -367,6 +370,7 @@ def parse_packet_trace(results_dir: Path) -> Optional[PacketTraceTable]:
             node_id = parts[3]
             mac_addr = parts[4]
             log_level = parts[5]
+            link_dir = parts[6]
 
             if log_level not in level_set:
                 continue
@@ -383,6 +387,20 @@ def parse_packet_trace(results_dir: Path) -> Optional[PacketTraceTable]:
                 device_stats[key][f"{log_level}_TX"] += 1
             elif event == "RCV":
                 device_stats[key][f"{log_level}_RX"] += 1
+            elif event == "DRP":
+                packet_uid = "-"
+                if len(parts) >= 8 and re.fullmatch(r"\d+", parts[7]):
+                    packet_uid = parts[7]
+                dropped_rows.append(
+                    [
+                        node_type,
+                        node_id,
+                        mac_addr,
+                        packet_uid,
+                        link_dir,
+                        log_level,
+                    ]
+                )
 
     if not device_stats:
         return None
@@ -468,7 +486,23 @@ def parse_packet_trace(results_dir: Path) -> Optional[PacketTraceTable]:
             ]
         )
 
-    return PacketTraceTable(path=path, header=header, rows=active_rows)
+    dropped_header = [
+        "node_type",
+        "node_id",
+        "mac",
+        "packet_uid",
+        "direction",
+        "log_level",
+    ]
+
+    dropped_rows.sort(key=lambda row: (row[0], row[1], row[2], row[3], row[4], row[5]))
+    return PacketTraceTable(
+        path=path,
+        header=header,
+        rows=active_rows,
+        dropped_header=dropped_header,
+        dropped_rows=dropped_rows,
+    )
 
 
 def parse_sat_coordinates(results_dir: Path) -> Optional[SatCoordinatesData]:
@@ -752,6 +786,7 @@ def render_report(
         page_number = 0
         rows_per_devices_page = 28
         rows_per_packet_page = 20
+        rows_per_dropped_packet_page = 28
         rows_per_summary_page = 22
         rows_per_loss_summary_page = 20
         toc_rows_per_page = 32
@@ -958,15 +993,19 @@ def render_report(
         packet_pages = 0
         if packet_trace_table is not None:
             packet_pages = (len(packet_trace_table.rows) + rows_per_packet_page - 1) // rows_per_packet_page
+        # Keep dropped-packets section visible even when no DRP events exist.
+        dropped_packet_pages = 1 if packet_trace_table is not None else 0
         stat_pages = len(stat_files)
         loss_stat_pages = len(visible_loss_stat_files)
 
         dynamic_entries_count = 0
         if sat_map_pages > 0:
             dynamic_entries_count += 1
-        if devices_pages > 0:
-            dynamic_entries_count += 1
         if packet_pages > 0:
+            dynamic_entries_count += 1
+        if dropped_packet_pages > 0:
+            dynamic_entries_count += 1
+        if devices_pages > 0:
             dynamic_entries_count += 1
         if summary_pages > 0:
             dynamic_entries_count += 1
@@ -996,12 +1035,15 @@ def render_report(
         if loss_nonzero_summary_pages > 0:
             toc_entries.append(("Non-zero packet loss summary", page_cursor))
             page_cursor += loss_nonzero_summary_pages
-        if devices_pages > 0:
-            toc_entries.append(("Devices table", page_cursor))
-            page_cursor += devices_pages
         if packet_pages > 0:
             toc_entries.append(("PacketTrace summary table", page_cursor))
             page_cursor += packet_pages
+        if dropped_packet_pages > 0:
+            toc_entries.append(("Dropped packet IDs by device", page_cursor))
+            page_cursor += dropped_packet_pages
+        if devices_pages > 0:
+            toc_entries.append(("Devices table", page_cursor))
+            page_cursor += devices_pages
         for stat in stat_files:
             toc_entries.append((f"{stat.path.name}", page_cursor))
             stat_page_map[stat.path.name] = page_cursor
@@ -1130,6 +1172,42 @@ def render_report(
                 fig = plt.figure(figsize=(11.69, 8.27))
                 map_rendered = False
 
+                def split_track_points(
+                    pts: List[Tuple[float, float, float, float]],
+                    jump_deg: float = 180.0,
+                ) -> List[Tuple[List[float], List[float]]]:
+                    """
+                    Split a trajectory into continuous segments, inserting a visual break
+                    when:
+                    - longitude jumps (e.g. crossing -180/180), or
+                    - time goes backwards (new trace cycle starts).
+                    This prevents drawing artificial straight lines between unrelated points.
+                    """
+                    if not pts:
+                        return []
+                    segments: List[Tuple[List[float], List[float]]] = []
+                    cur_lons = [pts[0][2]]
+                    cur_lats = [pts[0][1]]
+                    prev_t = pts[0][0]
+                    prev_lon = pts[0][2]
+                    for i in range(1, len(pts)):
+                        t = pts[i][0]
+                        lat = pts[i][1]
+                        lon = pts[i][2]
+                        if abs(lon - prev_lon) > jump_deg or t < prev_t:
+                            if cur_lons:
+                                segments.append((cur_lons, cur_lats))
+                            cur_lons = [lon]
+                            cur_lats = [lat]
+                        else:
+                            cur_lons.append(lon)
+                            cur_lats.append(lat)
+                        prev_t = t
+                        prev_lon = lon
+                    if cur_lons:
+                        segments.append((cur_lons, cur_lats))
+                    return segments
+
                 all_lats: List[float] = []
                 all_lons: List[float] = []
                 for sat_id in sat_ids:
@@ -1191,13 +1269,19 @@ def render_report(
                         lats = [p[1] for p in pts]
                         lons = [p[2] for p in pts]
                         alt_last = pts[-1][3] if pts else 0.0
-                        ax.plot(
-                            lons,
-                            lats,
-                            transform=ccrs.PlateCarree(),
-                            linewidth=1.0,
-                            label=f"sat {sat_id} ({alt_last:.0f} m)",
-                        )
+                        sat_segments = split_track_points(pts)
+                        sat_color = None
+                        for seg_idx, (seg_lons, seg_lats) in enumerate(sat_segments):
+                            line = ax.plot(
+                                seg_lons,
+                                seg_lats,
+                                transform=ccrs.PlateCarree(),
+                                linewidth=1.0,
+                                color=sat_color,
+                                label=f"sat {sat_id} ({alt_last:.0f} m)" if seg_idx == 0 else "_nolegend_",
+                            )[0]
+                            if sat_color is None:
+                                sat_color = line.get_color()
                         if lats and lons:
                             ax.text(
                                 lons[-1],
@@ -1228,15 +1312,20 @@ def render_report(
                             lats = [p[1] for p in pts]
                             lons = [p[2] for p in pts]
                             alt_last = pts[-1][3] if pts else 0.0
-                            ax.plot(
-                                lons,
-                                lats,
-                                transform=ccrs.PlateCarree(),
-                                linewidth=1.0,
-                                linestyle="--",
-                                color="tab:blue",
-                                label=f"UT {node_id} ({alt_last:.0f} m)",
-                            )
+                            ut_segments = split_track_points(pts)
+                            ut_color = None
+                            for seg_idx, (seg_lons, seg_lats) in enumerate(ut_segments):
+                                line = ax.plot(
+                                    seg_lons,
+                                    seg_lats,
+                                    transform=ccrs.PlateCarree(),
+                                    linewidth=1.0,
+                                    linestyle="--",
+                                    color=ut_color if ut_color is not None else "tab:blue",
+                                    label=f"UT {node_id} ({alt_last:.0f} m)" if seg_idx == 0 else "_nolegend_",
+                                )[0]
+                                if ut_color is None:
+                                    ut_color = line.get_color()
                             if lats and lons:
                                 ax.text(
                                     lons[-1],
@@ -1272,15 +1361,20 @@ def render_report(
                             lats = [p[1] for p in pts]
                             lons = [p[2] for p in pts]
                             alt_last = pts[-1][3] if pts else 0.0
-                            ax.plot(
-                                lons,
-                                lats,
-                                transform=ccrs.PlateCarree(),
-                                linewidth=1.0,
-                                linestyle=":",
-                                color="tab:green",
-                                label=f"GW {node_id} ({alt_last:.0f} m)",
-                            )
+                            gw_segments = split_track_points(pts)
+                            gw_color = None
+                            for seg_idx, (seg_lons, seg_lats) in enumerate(gw_segments):
+                                line = ax.plot(
+                                    seg_lons,
+                                    seg_lats,
+                                    transform=ccrs.PlateCarree(),
+                                    linewidth=1.0,
+                                    linestyle=":",
+                                    color=gw_color if gw_color is not None else "tab:green",
+                                    label=f"GW {node_id} ({alt_last:.0f} m)" if seg_idx == 0 else "_nolegend_",
+                                )[0]
+                                if gw_color is None:
+                                    gw_color = line.get_color()
                             if lats and lons:
                                 ax.text(
                                     lons[-1],
@@ -1337,7 +1431,18 @@ def render_report(
                         lats = [p[1] for p in pts]
                         lons = [p[2] for p in pts]
                         alt_last = pts[-1][3] if pts else 0.0
-                        ax.plot(lons, lats, linewidth=1.0, label=f"sat {sat_id} ({alt_last:.0f} m)")
+                        sat_segments = split_track_points(pts)
+                        sat_color = None
+                        for seg_idx, (seg_lons, seg_lats) in enumerate(sat_segments):
+                            line = ax.plot(
+                                seg_lons,
+                                seg_lats,
+                                linewidth=1.0,
+                                color=sat_color,
+                                label=f"sat {sat_id} ({alt_last:.0f} m)" if seg_idx == 0 else "_nolegend_",
+                            )[0]
+                            if sat_color is None:
+                                sat_color = line.get_color()
                         if lats and lons:
                             ax.text(
                                 lons[-1],
@@ -1365,14 +1470,19 @@ def render_report(
                             lats = [p[1] for p in pts]
                             lons = [p[2] for p in pts]
                             alt_last = pts[-1][3] if pts else 0.0
-                            ax.plot(
-                                lons,
-                                lats,
-                                linewidth=1.0,
-                                linestyle="--",
-                                color="tab:blue",
-                                label=f"UT {node_id} ({alt_last:.0f} m)",
-                            )
+                            ut_segments = split_track_points(pts)
+                            ut_color = None
+                            for seg_idx, (seg_lons, seg_lats) in enumerate(ut_segments):
+                                line = ax.plot(
+                                    seg_lons,
+                                    seg_lats,
+                                    linewidth=1.0,
+                                    linestyle="--",
+                                    color=ut_color if ut_color is not None else "tab:blue",
+                                    label=f"UT {node_id} ({alt_last:.0f} m)" if seg_idx == 0 else "_nolegend_",
+                                )[0]
+                                if ut_color is None:
+                                    ut_color = line.get_color()
                             if lats and lons:
                                 ax.text(
                                     lons[-1],
@@ -1398,14 +1508,19 @@ def render_report(
                             lats = [p[1] for p in pts]
                             lons = [p[2] for p in pts]
                             alt_last = pts[-1][3] if pts else 0.0
-                            ax.plot(
-                                lons,
-                                lats,
-                                linewidth=1.0,
-                                linestyle=":",
-                                color="tab:green",
-                                label=f"GW {node_id} ({alt_last:.0f} m)",
-                            )
+                            gw_segments = split_track_points(pts)
+                            gw_color = None
+                            for seg_idx, (seg_lons, seg_lats) in enumerate(gw_segments):
+                                line = ax.plot(
+                                    seg_lons,
+                                    seg_lats,
+                                    linewidth=1.0,
+                                    linestyle=":",
+                                    color=gw_color if gw_color is not None else "tab:green",
+                                    label=f"GW {node_id} ({alt_last:.0f} m)" if seg_idx == 0 else "_nolegend_",
+                                )[0]
+                                if gw_color is None:
+                                    gw_color = line.get_color()
                             if lats and lons:
                                 ax.text(
                                     lons[-1],
@@ -1561,6 +1676,68 @@ def render_report(
                     fixed_body_row_height=0.03,
                 )
 
+        if packet_trace_table is not None:
+            for chunk_start in range(0, len(packet_trace_table.rows), rows_per_packet_page):
+                chunk = packet_trace_table.rows[chunk_start:chunk_start + rows_per_packet_page]
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                title_suffix = ""
+                if len(packet_trace_table.rows) > rows_per_packet_page:
+                    page_idx = (chunk_start // rows_per_packet_page) + 1
+                    page_cnt = (len(packet_trace_table.rows) + rows_per_packet_page - 1) // rows_per_packet_page
+                    title_suffix = f" (page {page_idx}/{page_cnt})"
+                chunk_with_idx = [
+                    [f"{chunk_start + i + 1}."] + row
+                    for i, row in enumerate(chunk)
+                ]
+                header = ["No."] + packet_trace_table.header
+                draw_table_page(
+                    fig=fig,
+                    ax=ax,
+                    title=f"PacketTrace Device Counters from {packet_trace_table.path.name}{title_suffix}",
+                    header=header,
+                    rows=chunk_with_idx,
+                    source_text=f"Source: {packet_trace_table.path.name}",
+                    body_fontsize=7.0,
+                    header_fontsize=7.3,
+                    chars_per_col=[5, 10, 8, 17, 6, 6, 7, 7, 7, 7, 7, 7, 6, 6],
+                    col_widths=[0.03, 0.066, 0.0675, 0.126, 0.055, 0.055, 0.065, 0.065, 0.065, 0.065, 0.065, 0.065, 0.055, 0.055],
+                )
+            dropped_rows_for_render = packet_trace_table.dropped_rows
+            if not dropped_rows_for_render:
+                dropped_rows_for_render = [
+                    ["INFO", "-", "-", "No dropped packets found", "-", "-"]
+                ]
+
+            for chunk_start in range(0, len(dropped_rows_for_render), rows_per_dropped_packet_page):
+                chunk = dropped_rows_for_render[
+                    chunk_start:chunk_start + rows_per_dropped_packet_page
+                ]
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                title_suffix = ""
+                if len(dropped_rows_for_render) > rows_per_dropped_packet_page:
+                    page_idx = (chunk_start // rows_per_dropped_packet_page) + 1
+                    page_cnt = (
+                        len(dropped_rows_for_render) + rows_per_dropped_packet_page - 1
+                    ) // rows_per_dropped_packet_page
+                    title_suffix = f" (page {page_idx}/{page_cnt})"
+                chunk_with_idx = [
+                    [f"{chunk_start + i + 1}."] + row
+                    for i, row in enumerate(chunk)
+                ]
+                header = ["No."] + packet_trace_table.dropped_header
+                draw_table_page(
+                    fig=fig,
+                    ax=ax,
+                    title=f"Dropped packet IDs by device from {packet_trace_table.path.name}{title_suffix}",
+                    header=header,
+                    rows=chunk_with_idx,
+                    source_text=f"Source: {packet_trace_table.path.name} (event=DRP)",
+                    body_fontsize=7.4,
+                    header_fontsize=7.7,
+                    chars_per_col=[5, 10, 8, 17, 12, 9, 9],
+                    col_widths=[0.04, 0.08, 0.07, 0.21, 0.10, 0.08, 0.08],
+                )
+
         if devices_table is not None:
             for chunk_start in range(0, len(devices_table.rows), rows_per_devices_page):
                 chunk = devices_table.rows[chunk_start:chunk_start + rows_per_devices_page]
@@ -1593,33 +1770,6 @@ def render_report(
                     chars_per_col=[5, 8, 6, 7, 24, 20],
                     col_widths=[0.045, 0.075, 0.0525, 0.0525, 0.195, 0.1925],
                     fixed_body_row_height=0.03,
-                )
-
-        if packet_trace_table is not None:
-            for chunk_start in range(0, len(packet_trace_table.rows), rows_per_packet_page):
-                chunk = packet_trace_table.rows[chunk_start:chunk_start + rows_per_packet_page]
-                fig, ax = plt.subplots(figsize=(11.69, 8.27))
-                title_suffix = ""
-                if len(packet_trace_table.rows) > rows_per_packet_page:
-                    page_idx = (chunk_start // rows_per_packet_page) + 1
-                    page_cnt = (len(packet_trace_table.rows) + rows_per_packet_page - 1) // rows_per_packet_page
-                    title_suffix = f" (page {page_idx}/{page_cnt})"
-                chunk_with_idx = [
-                    [f"{chunk_start + i + 1}."] + row
-                    for i, row in enumerate(chunk)
-                ]
-                header = ["No."] + packet_trace_table.header
-                draw_table_page(
-                    fig=fig,
-                    ax=ax,
-                    title=f"PacketTrace Device Counters from {packet_trace_table.path.name}{title_suffix}",
-                    header=header,
-                    rows=chunk_with_idx,
-                    source_text=f"Source: {packet_trace_table.path.name}",
-                    body_fontsize=7.0,
-                    header_fontsize=7.3,
-                    chars_per_col=[5, 10, 8, 17, 6, 6, 7, 7, 7, 7, 7, 7, 6, 6],
-                    col_widths=[0.03, 0.066, 0.0675, 0.126, 0.055, 0.055, 0.065, 0.065, 0.065, 0.065, 0.065, 0.065, 0.055, 0.055],
                 )
 
         for stat in stat_files:
