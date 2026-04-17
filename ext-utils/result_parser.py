@@ -1734,8 +1734,8 @@ def render_report(
                     source_text=f"Source: {packet_trace_table.path.name} (event=DRP)",
                     body_fontsize=7.4,
                     header_fontsize=7.7,
-                    chars_per_col=[5, 10, 8, 17, 12, 9, 9],
-                    col_widths=[0.04, 0.08, 0.07, 0.21, 0.10, 0.08, 0.08],
+                    chars_per_col=[5, 10, 8, 8, 12, 9, 9],
+                    col_widths=[0.04, 0.08, 0.07, 0.105, 0.10, 0.08, 0.08],
                 )
 
         if devices_table is not None:
