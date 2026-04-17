@@ -180,6 +180,19 @@ main(int argc, char* argv[])
     s->AddPerBeamFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
     s->AddPerBeamFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
     s->AddPerBeamBeamServiceTime(SatStatsHelper::OUTPUT_SCALAR_FILE);
+
+    // Packet loss and collision diagnostics
+    s->AddGlobalFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddGlobalRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederCrdsaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederCrdsaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederSlottedAlohaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederSlottedAlohaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddGlobalPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerIslPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
+
     simulationHelper->EnableProgressLogs();
 
     const auto simulationStart = std::chrono::steady_clock::now();

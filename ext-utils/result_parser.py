@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import math
 import re
 import warnings
 from dataclasses import dataclass
@@ -71,6 +72,21 @@ class NodeCoordinatesData:
 
 @dataclass
 class SummaryTable:
+    header: List[str]
+    rows: List[List[str]]
+
+
+@dataclass
+class LossStatFile:
+    path: Path
+    category: str
+    label_name: str
+    value_name: str
+    rows: List[Tuple[str, float]]
+
+
+@dataclass
+class LossSummaryTable:
     header: List[str]
     rows: List[List[str]]
 
@@ -205,6 +221,75 @@ def collect_stat_files(results_dir: Path) -> List[StatFile]:
             )
         )
     return files
+
+
+def parse_loss_stat_rows(path: Path) -> Tuple[str, str, List[Tuple[str, float]]]:
+    label_name = "label"
+    value_name = "value"
+    rows: List[Tuple[str, float]] = []
+
+    with path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("%"):
+                payload = line[1:].strip()
+                if payload and ":" not in payload:
+                    parts = payload.split()
+                    if len(parts) >= 2:
+                        label_name = parts[0]
+                        value_name = parts[1]
+                continue
+
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            label = parts[0]
+            try:
+                value = float(parts[1])
+            except ValueError:
+                continue
+            rows.append((label, value))
+
+    return label_name, value_name, rows
+
+
+def collect_loss_stat_files(results_dir: Path) -> List[LossStatFile]:
+    files: List[LossStatFile] = []
+    for path in sorted(results_dir.glob("stat-*-scalar.txt")):
+        name = path.name
+        if not any(token in name for token in ("error", "collision", "drop-rate")):
+            continue
+        if parse_file_name(path) is not None:
+            continue
+
+        label_name, value_name, rows = parse_loss_stat_rows(path)
+        if not rows:
+            continue
+
+        category = "other"
+        if "drop-rate" in name:
+            category = "drop-rate"
+        elif "collision" in name:
+            category = "collision"
+        elif "error" in name:
+            category = "error"
+
+        files.append(
+            LossStatFile(
+                path=path,
+                category=category,
+                label_name=label_name,
+                value_name=value_name,
+                rows=rows,
+            )
+        )
+    return files
+
+
+def has_visible_loss_values(stat: LossStatFile) -> bool:
+    return any((not math.isnan(value)) and abs(value) > 0.0 for _, value in stat.rows)
 
 
 def find_xml_files(results_dir: Path) -> List[Path]:
@@ -539,10 +624,108 @@ def build_summary_table(stat_files: List[StatFile]) -> Optional[SummaryTable]:
     return SummaryTable(header=header, rows=rows)
 
 
+def build_loss_summary_table(loss_stat_files: List[LossStatFile]) -> Optional[LossSummaryTable]:
+    if not loss_stat_files:
+        return None
+
+    header = [
+        "No.",
+        "source_file",
+        "category",
+        "label",
+        "value",
+        "rows",
+        "valid",
+        "non_zero",
+        "nan",
+        "min",
+        "avg",
+        "max",
+        "sum",
+    ]
+    rows: List[List[str]] = []
+
+    for i, stat in enumerate(loss_stat_files, start=1):
+        valid_vals = [value for _, value in stat.rows if not math.isnan(value)]
+        non_zero_count = sum(1 for value in valid_vals if abs(value) > 0.0)
+        nan_count = sum(1 for _, value in stat.rows if math.isnan(value))
+        y_min = min(valid_vals) if valid_vals else float("nan")
+        y_avg = (sum(valid_vals) / len(valid_vals)) if valid_vals else float("nan")
+        y_max = max(valid_vals) if valid_vals else float("nan")
+        y_sum = sum(valid_vals) if valid_vals else float("nan")
+
+        def fmt_num(value: float) -> str:
+            return "nan" if math.isnan(value) else f"{value:.6g}"
+
+        rows.append(
+            [
+                f"{i}.",
+                stat.path.name,
+                stat.category,
+                stat.label_name,
+                stat.value_name,
+                str(len(stat.rows)),
+                str(len(valid_vals)),
+                str(non_zero_count),
+                str(nan_count),
+                fmt_num(y_min),
+                fmt_num(y_avg),
+                fmt_num(y_max),
+                fmt_num(y_sum),
+            ]
+        )
+
+    return LossSummaryTable(header=header, rows=rows)
+
+
+def build_loss_nonzero_summary_table(loss_stat_files: List[LossStatFile]) -> Optional[LossSummaryTable]:
+    if not loss_stat_files:
+        return None
+
+    header = [
+        "No.",
+        "source_file",
+        "category",
+        "rows",
+        "valid",
+        "non_zero",
+        "min_non_zero",
+        "max_non_zero",
+        "sum_non_zero",
+    ]
+    rows: List[List[str]] = []
+
+    for stat in loss_stat_files:
+        valid_vals = [value for _, value in stat.rows if not math.isnan(value)]
+        non_zero_vals = [value for value in valid_vals if abs(value) > 0.0]
+        if not non_zero_vals:
+            continue
+
+        row_no = len(rows) + 1
+        rows.append(
+            [
+                f"{row_no}.",
+                stat.path.name,
+                stat.category,
+                str(len(stat.rows)),
+                str(len(valid_vals)),
+                str(len(non_zero_vals)),
+                f"{min(non_zero_vals):.6g}",
+                f"{max(non_zero_vals):.6g}",
+                f"{sum(non_zero_vals):.6g}",
+            ]
+        )
+
+    if not rows:
+        return None
+    return LossSummaryTable(header=header, rows=rows)
+
+
 def render_report(
     output_pdf: Path,
     results_dir: Path,
     stat_files: List[StatFile],
+    loss_stat_files: List[LossStatFile],
     xml_files: List[Path],
     sat_coordinates: Optional[SatCoordinatesData],
     ut_coordinates: Optional[NodeCoordinatesData],
@@ -550,6 +733,8 @@ def render_report(
     additional_sat_map_ids: List[int],
     quiet_cartopy_download_warnings: bool,
     summary_table: Optional[SummaryTable],
+    loss_summary_table: Optional[LossSummaryTable],
+    loss_nonzero_summary_table: Optional[LossSummaryTable],
     devices_table: Optional[DevicesTable],
     packet_trace_table: Optional[PacketTraceTable],
 ) -> None:
@@ -568,7 +753,12 @@ def render_report(
         rows_per_devices_page = 28
         rows_per_packet_page = 20
         rows_per_summary_page = 22
+        rows_per_loss_summary_page = 20
         toc_rows_per_page = 32
+        visible_loss_stat_files = [
+            stat for stat in sorted(loss_stat_files, key=lambda item: (item.category, item.path.name))
+            if has_visible_loss_values(stat)
+        ]
 
         def save_page(fig) -> None:
             nonlocal page_number
@@ -585,9 +775,16 @@ def render_report(
             pdf.savefig(fig)
             plt.close(fig)
 
-        def add_rubric(fig, y: float, label: str, value: str, label_x: float = PAGE_LEFT) -> None:
+        def add_rubric(
+            fig,
+            y: float,
+            label: str,
+            value: str,
+            label_x: float = PAGE_LEFT,
+            value_x_offset: float = 0.195,
+        ) -> None:
             fig.text(label_x, y, label, fontsize=11, fontweight="bold")
-            fig.text(label_x + 0.195, y, value, fontsize=11)
+            fig.text(label_x + value_x_offset, y, value, fontsize=11)
 
         def estimate_lines(text: str, chars_per_line: int) -> int:
             if chars_per_line <= 0:
@@ -746,12 +943,23 @@ def render_report(
         summary_pages = 0
         if summary_table is not None:
             summary_pages = (len(summary_table.rows) + rows_per_summary_page - 1) // rows_per_summary_page
+        loss_summary_pages = 0
+        if loss_summary_table is not None:
+            loss_summary_pages = (
+                len(loss_summary_table.rows) + rows_per_loss_summary_page - 1
+            ) // rows_per_loss_summary_page
+        loss_nonzero_summary_pages = 0
+        if loss_nonzero_summary_table is not None:
+            loss_nonzero_summary_pages = (
+                len(loss_nonzero_summary_table.rows) + rows_per_loss_summary_page - 1
+            ) // rows_per_loss_summary_page
         if devices_table is not None:
             devices_pages = (len(devices_table.rows) + rows_per_devices_page - 1) // rows_per_devices_page
         packet_pages = 0
         if packet_trace_table is not None:
             packet_pages = (len(packet_trace_table.rows) + rows_per_packet_page - 1) // rows_per_packet_page
         stat_pages = len(stat_files)
+        loss_stat_pages = len(visible_loss_stat_files)
 
         dynamic_entries_count = 0
         if sat_map_pages > 0:
@@ -762,7 +970,12 @@ def render_report(
             dynamic_entries_count += 1
         if summary_pages > 0:
             dynamic_entries_count += 1
+        if loss_summary_pages > 0:
+            dynamic_entries_count += 1
+        if loss_nonzero_summary_pages > 0:
+            dynamic_entries_count += 1
         dynamic_entries_count += stat_pages
+        dynamic_entries_count += loss_stat_pages
         toc_pages = max(1, (dynamic_entries_count + toc_rows_per_page - 1) // toc_rows_per_page)
         first_content_page = 2 + toc_pages
 
@@ -777,6 +990,12 @@ def render_report(
         if summary_pages > 0:
             toc_entries.append(("Key metrics summary table", page_cursor))
             page_cursor += summary_pages
+        if loss_summary_pages > 0:
+            toc_entries.append(("Packet loss summary table", page_cursor))
+            page_cursor += loss_summary_pages
+        if loss_nonzero_summary_pages > 0:
+            toc_entries.append(("Non-zero packet loss summary", page_cursor))
+            page_cursor += loss_nonzero_summary_pages
         if devices_pages > 0:
             toc_entries.append(("Devices table", page_cursor))
             page_cursor += devices_pages
@@ -787,6 +1006,11 @@ def render_report(
             toc_entries.append((f"{stat.path.name}", page_cursor))
             stat_page_map[stat.path.name] = page_cursor
             page_cursor += 1
+        loss_stat_page_map: Dict[str, int] = {}
+        for stat in visible_loss_stat_files:
+            toc_entries.append((f"{stat.path.name}", page_cursor))
+            loss_stat_page_map[stat.path.name] = page_cursor
+            page_cursor += 1
 
         # Cover page (preamble)
         fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
@@ -796,46 +1020,53 @@ def render_report(
         add_rubric(fig, PAGE_TOP - 0.13, "Generated at:", now)
         add_rubric(fig, PAGE_TOP - 0.18, "Results directory:", str(results_dir))
         add_rubric(fig, PAGE_TOP - 0.23, "Statistics files included:", str(len(stat_files)))
-        add_rubric(fig, PAGE_TOP - 0.28, "XML attributes file(s):", xml_text)
         add_rubric(
             fig,
-            PAGE_TOP - 0.33,
+            PAGE_TOP - 0.28,
+            "Loss statistics files included:",
+            str(len(loss_stat_files)),
+            value_x_offset=0.235,
+        )
+        add_rubric(fig, PAGE_TOP - 0.33, "XML attributes file(s):", xml_text)
+        add_rubric(
+            fig,
+            PAGE_TOP - 0.38,
             "Devices table file:",
             devices_table.path.name if devices_table else "Not found",
         )
         add_rubric(
             fig,
-            PAGE_TOP - 0.38,
+            PAGE_TOP - 0.43,
             "Packet trace file:",
             packet_trace_table.path.name if packet_trace_table else "Not found",
         )
         add_rubric(
             fig,
-            PAGE_TOP - 0.43,
+            PAGE_TOP - 0.48,
             "Satellite coordinates file:",
             sat_coordinates.path.name if sat_coordinates else "Not found",
         )
         add_rubric(
             fig,
-            PAGE_TOP - 0.48,
+            PAGE_TOP - 0.53,
             "UT coordinates file:",
             ut_coordinates.path.name if ut_coordinates else "Not found",
         )
         add_rubric(
             fig,
-            PAGE_TOP - 0.53,
+            PAGE_TOP - 0.58,
             "GW coordinates file:",
             gw_coordinates.path.name if gw_coordinates else "Not found",
         )
         fig.text(
             PAGE_LEFT,
-            PAGE_TOP - 0.60,
+            PAGE_TOP - 0.66,
             "Each following page contains one graph and the source filename.",
             fontsize=10,
         )
         fig.text(
             PAGE_LEFT,
-            PAGE_TOP - 0.64,
+            PAGE_TOP - 0.70,
             "Files without data rows are skipped automatically.",
             fontsize=10,
         )
@@ -1264,6 +1495,72 @@ def render_report(
                     fixed_body_row_height=0.03,
                 )
 
+        if loss_summary_table is not None:
+            for chunk_start in range(0, len(loss_summary_table.rows), rows_per_loss_summary_page):
+                chunk = loss_summary_table.rows[chunk_start:chunk_start + rows_per_loss_summary_page]
+                chunk_targets: List[Optional[int]] = []
+                for row in chunk:
+                    src_file = row[1] if len(row) > 1 else ""
+                    chunk_targets.append(loss_stat_page_map.get(src_file))
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                title_suffix = ""
+                if len(loss_summary_table.rows) > rows_per_loss_summary_page:
+                    page_idx = (chunk_start // rows_per_loss_summary_page) + 1
+                    page_cnt = (
+                        len(loss_summary_table.rows) + rows_per_loss_summary_page - 1
+                    ) // rows_per_loss_summary_page
+                    title_suffix = f" (page {page_idx}/{page_cnt})"
+                draw_table_page(
+                    fig=fig,
+                    ax=ax,
+                    title=f"Packet Loss Summary{title_suffix}",
+                    header=loss_summary_table.header,
+                    rows=chunk,
+                    source_text="Source: loss/collision/error/drop-rate scalar files",
+                    body_fontsize=7.1,
+                    header_fontsize=7.4,
+                    chars_per_col=[4, 33, 10, 10, 12, 6, 6, 8, 5, 9, 9, 9, 9],
+                    col_widths=[0.03, 0.32, 0.08, 0.07, 0.08, 0.045, 0.045, 0.055, 0.04, 0.055, 0.055, 0.055, 0.055],
+                    force_left_cols=[1, 2, 3, 4],
+                    link_targets=chunk_targets,
+                    link_col_idx=1,
+                    fixed_body_row_height=0.03,
+                )
+
+        if loss_nonzero_summary_table is not None:
+            for chunk_start in range(0, len(loss_nonzero_summary_table.rows), rows_per_loss_summary_page):
+                chunk = loss_nonzero_summary_table.rows[
+                    chunk_start:chunk_start + rows_per_loss_summary_page
+                ]
+                chunk_targets: List[Optional[int]] = []
+                for row in chunk:
+                    src_file = row[1] if len(row) > 1 else ""
+                    chunk_targets.append(loss_stat_page_map.get(src_file))
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                title_suffix = ""
+                if len(loss_nonzero_summary_table.rows) > rows_per_loss_summary_page:
+                    page_idx = (chunk_start // rows_per_loss_summary_page) + 1
+                    page_cnt = (
+                        len(loss_nonzero_summary_table.rows) + rows_per_loss_summary_page - 1
+                    ) // rows_per_loss_summary_page
+                    title_suffix = f" (page {page_idx}/{page_cnt})"
+                draw_table_page(
+                    fig=fig,
+                    ax=ax,
+                    title=f"Non-Zero Packet Loss Summary{title_suffix}",
+                    header=loss_nonzero_summary_table.header,
+                    rows=chunk,
+                    source_text="Source: non-zero rows from loss/collision/error/drop-rate scalar files",
+                    body_fontsize=7.2,
+                    header_fontsize=7.5,
+                    chars_per_col=[4, 34, 10, 6, 6, 8, 10, 10, 10],
+                    col_widths=[0.03, 0.34, 0.08, 0.05, 0.05, 0.06, 0.08, 0.08, 0.08],
+                    force_left_cols=[1, 2],
+                    link_targets=chunk_targets,
+                    link_col_idx=1,
+                    fixed_body_row_height=0.03,
+                )
+
         if devices_table is not None:
             for chunk_start in range(0, len(devices_table.rows), rows_per_devices_page):
                 chunk = devices_table.rows[chunk_start:chunk_start + rows_per_devices_page]
@@ -1295,6 +1592,7 @@ def render_report(
                     header_fontsize=8.3,
                     chars_per_col=[5, 8, 6, 7, 24, 20],
                     col_widths=[0.045, 0.075, 0.0525, 0.0525, 0.195, 0.1925],
+                    fixed_body_row_height=0.03,
                 )
 
         if packet_trace_table is not None:
@@ -1351,6 +1649,73 @@ def render_report(
                 family="monospace",
             )
             fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.04, PAGE_RIGHT, PAGE_TOP))
+            save_page(fig)
+
+        category_colors = {
+            "error": "#d9534f",
+            "collision": "#f0ad4e",
+            "drop-rate": "#5b8ff9",
+            "other": "#7f8c8d",
+        }
+        category_titles = {
+            "error": "Packet Error",
+            "collision": "Packet Collision",
+            "drop-rate": "Packet Drop Rate",
+            "other": "Loss Statistic",
+        }
+        for stat in visible_loss_stat_files:
+            valid_rows = [(label, value) for label, value in stat.rows if not math.isnan(value)]
+            non_zero_rows = [(label, value) for label, value in valid_rows if abs(value) > 0.0]
+            plot_rows = non_zero_rows if non_zero_rows else valid_rows
+            plot_rows.sort(key=lambda item: item[1], reverse=True)
+            top_rows = plot_rows[:25]
+
+            fig, ax = plt.subplots(figsize=(11.69, 8.27))
+            if top_rows:
+                labels = [label for label, _ in top_rows]
+                values = [value for _, value in top_rows]
+                y_pos = list(range(len(labels)))
+                ax.barh(y_pos, values, color=category_colors.get(stat.category, "#7f8c8d"))
+                ax.set_yticks(y_pos)
+                ax.set_yticklabels(labels, fontsize=8)
+                ax.invert_yaxis()
+                ax.grid(True, axis="x", alpha=0.3)
+            else:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No finite values available for plotting.\nAll rows are NaN or invalid.",
+                    ha="center",
+                    va="center",
+                    fontsize=12,
+                    transform=ax.transAxes,
+                )
+                ax.set_xticks([])
+                ax.set_yticks([])
+
+            ax.set_xlabel(stat.value_name)
+            ax.set_ylabel(stat.label_name)
+            ax.set_title(f"{category_titles.get(stat.category, 'Loss Statistic')} | {stat.path.name}")
+
+            non_zero_count = sum(1 for _, value in valid_rows if abs(value) > 0.0)
+            meta_lines = [
+                f"Source: {stat.path.name}",
+                f"Category: {stat.category}",
+                f"Rows: {len(stat.rows)} | finite: {len(valid_rows)} | non-zero: {non_zero_count}",
+                (
+                    f"Showing top {min(25, len(plot_rows))} "
+                    f"{'non-zero' if non_zero_rows else 'finite'} labels by {stat.value_name}"
+                ),
+            ]
+            fig.text(
+                PAGE_LEFT,
+                PAGE_BOTTOM + 0.003,
+                "\n".join(meta_lines),
+                fontsize=9,
+                va="bottom",
+                family="monospace",
+            )
+            fig.tight_layout(rect=(PAGE_LEFT, PAGE_BOTTOM + 0.055, PAGE_RIGHT, PAGE_TOP))
             save_page(fig)
 
     links_ok, links_msg = add_internal_toc_links(output_pdf, toc_links)
@@ -1439,6 +1804,7 @@ def main() -> None:
         print("[INFO] cartopy DownloadWarning suppression: OFF")
 
     stat_files = collect_stat_files(results_dir)
+    loss_stat_files = collect_loss_stat_files(results_dir)
     xml_files = find_xml_files(results_dir)
     sat_coordinates = parse_sat_coordinates(results_dir)
     ut_coordinates = parse_node_coordinates(results_dir, "UtCoordinates.log", "UT")
@@ -1449,11 +1815,14 @@ def main() -> None:
         args.satellite_map_list,
     )
     summary_table = build_summary_table(stat_files)
+    loss_summary_table = build_loss_summary_table(loss_stat_files)
+    loss_nonzero_summary_table = build_loss_nonzero_summary_table(loss_stat_files)
     devices_table = parse_devices_table(results_dir)
     packet_trace_table = parse_packet_trace(results_dir)
 
     if (
         not stat_files
+        and not loss_stat_files
         and devices_table is None
         and packet_trace_table is None
         and sat_coordinates is None
@@ -1461,7 +1830,7 @@ def main() -> None:
         and gw_coordinates is None
     ):
         raise SystemExit(
-            "No non-empty stat-*.txt files found, DevicesTable.txt missing/empty, and "
+            "No non-empty supported stat files found, DevicesTable.txt missing/empty, and "
             "PacketTrace.log missing/empty, and SatCoordinates.log/UtCoordinates.log/"
             "GwCoordinates.log missing/empty."
         )
@@ -1470,6 +1839,7 @@ def main() -> None:
         output_pdf,
         results_dir,
         stat_files,
+        loss_stat_files,
         xml_files,
         sat_coordinates,
         ut_coordinates,
@@ -1477,6 +1847,8 @@ def main() -> None:
         additional_sat_map_ids,
         args.quiet_cartopy_download_warnings == "on",
         summary_table,
+        loss_summary_table,
+        loss_nonzero_summary_table,
         devices_table,
         packet_trace_table,
     )
