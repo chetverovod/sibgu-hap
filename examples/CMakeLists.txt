@@ -103,3 +103,16 @@ build_lib_example(
                        ${libflow-monitor}
 )
 
+build_lib_example(
+    NAME sat-handover-2-hap
+    SOURCE_FILES sat-handover-2-hap.cc
+                 ../stats/device-ip-table.cc
+                 ../model/orbiter-trajectory-validation.cc
+                 ../stats/pcap-node-tracing.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libinternet}
+                       ${libwifi}
+                       ${libsatellite}
+                       ${libflow-monitor}
+)
+

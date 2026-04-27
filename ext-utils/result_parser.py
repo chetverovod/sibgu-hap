@@ -1171,6 +1171,7 @@ def render_report(
                 nonlocal cartopy_warning_printed
                 fig = plt.figure(figsize=(11.69, 8.27))
                 map_rendered = False
+                km_per_degree = 111.32
 
                 def split_track_points(
                     pts: List[Tuple[float, float, float, float]],
@@ -1235,12 +1236,20 @@ def render_report(
                 lat1 = min(90.0, lat_max + lat_pad)
                 lon0 = max(-180.0, lon_min - lon_pad)
                 lon1 = min(180.0, lon_max + lon_pad)
+                xt_step = 1 if (lon1 - lon0) <= 15 else 2 if (lon1 - lon0) <= 40 else 5
+                yt_step = 1 if (lat1 - lat0) <= 15 else 2 if (lat1 - lat0) <= 40 else 5
+                x_start = int(lon0 // xt_step) * xt_step
+                y_start = int(lat0 // yt_step) * yt_step
+                xticks = list(range(x_start, int(lon1) + xt_step, xt_step))
+                yticks = list(range(y_start, int(lat1) + yt_step, yt_step))
+
+                def format_degree_km_label(value_deg: float) -> str:
+                    return f"{value_deg:g}\n{abs(value_deg) * km_per_degree:.1f} km"
 
                 try:
                     import cartopy.crs as ccrs
                     import cartopy.feature as cfeature
                     from cartopy.io import DownloadWarning
-                    from cartopy.mpl.gridliner import LATITUDE_FORMATTER, LONGITUDE_FORMATTER
 
                     ax = fig.add_subplot(1, 1, 1, projection=ccrs.PlateCarree())
                     ax.set_extent([lon0, lon1, lat0, lat1], crs=ccrs.PlateCarree())
@@ -1252,18 +1261,20 @@ def render_report(
                         ax.add_feature(cfeature.LAND, facecolor="0.9", edgecolor="black", linewidth=0.3)
                         ax.coastlines(color="black", linewidth=0.5)
                     gl = ax.gridlines(
-                        draw_labels=True,
+                        draw_labels=False,
                         color="0.6",
                         linewidth=0.4,
                         alpha=0.5,
                         linestyle="--",
                     )
-                    gl.top_labels = False
-                    gl.right_labels = False
-                    gl.xformatter = LONGITUDE_FORMATTER
-                    gl.yformatter = LATITUDE_FORMATTER
-                    gl.xlabel_style = {"size": 8, "color": "0.25"}
-                    gl.ylabel_style = {"size": 8, "color": "0.25"}
+                    ax.set_xticks(xticks, crs=ccrs.PlateCarree())
+                    ax.set_yticks(yticks, crs=ccrs.PlateCarree())
+                    ax.set_xticklabels([format_degree_km_label(x) for x in xticks], fontsize=7.5, color="0.25")
+                    ax.set_yticklabels([format_degree_km_label(y) for y in yticks], fontsize=7.5, color="0.25")
+                    ax.tick_params(axis="x", pad=2)
+                    ax.tick_params(axis="y", pad=2)
+                    ax.set_xlabel("Longitude (deg)\nDistance from Greenwich (km)", fontsize=8.5)
+                    ax.set_ylabel("Latitude (deg)\nDistance from Equator (km)", fontsize=8.5)
                     for sat_id in sat_ids:
                         pts = sat_coordinates.by_sat_id.get(sat_id, [])
                         lats = [p[1] for p in pts]
@@ -1416,16 +1427,14 @@ def render_report(
                     ax = fig.add_subplot(1, 1, 1)
                     ax.set_xlim(lon0, lon1)
                     ax.set_ylim(lat0, lat1)
-                    ax.set_xlabel("Longitude (deg)")
-                    ax.set_ylabel("Latitude (deg)")
+                    ax.set_xlabel("Longitude (deg)\nDistance from Greenwich (km)")
+                    ax.set_ylabel("Latitude (deg)\nDistance from Equator (km)")
                     ax.grid(True, linestyle="--", color="0.6", linewidth=0.4, alpha=0.6)
                     # Explicit coordinate ticks so grid coordinates are visible on all fallback maps.
-                    xt_step = 1 if (lon1 - lon0) <= 15 else 2 if (lon1 - lon0) <= 40 else 5
-                    yt_step = 1 if (lat1 - lat0) <= 15 else 2 if (lat1 - lat0) <= 40 else 5
-                    x_start = int(lon0 // xt_step) * xt_step
-                    y_start = int(lat0 // yt_step) * yt_step
-                    ax.set_xticks(list(range(x_start, int(lon1) + xt_step, xt_step)))
-                    ax.set_yticks(list(range(y_start, int(lat1) + yt_step, yt_step)))
+                    ax.set_xticks(xticks)
+                    ax.set_yticks(yticks)
+                    ax.set_xticklabels([format_degree_km_label(x) for x in xticks], fontsize=7.5, color="0.25")
+                    ax.set_yticklabels([format_degree_km_label(y) for y in yticks], fontsize=7.5, color="0.25")
                     for sat_id in sat_ids:
                         pts = sat_coordinates.by_sat_id.get(sat_id, [])
                         lats = [p[1] for p in pts]
