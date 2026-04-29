@@ -938,6 +938,85 @@ def build_tsk_from_input(
         )
 
 
+def _load_task_to_staging(input_path: Path, staging: Path) -> Path:
+    if input_path.is_dir():
+        shutil.copytree(input_path, staging)
+    elif input_path.is_file() and zipfile.is_zipfile(input_path):
+        staging.mkdir(parents=True, exist_ok=True)
+        shutil.unpack_archive(str(input_path), str(staging), format="zip")
+    else:
+        raise ValueError("input must be a directory or a zip archive.")
+
+    children = [p for p in staging.iterdir()]
+    if len(children) == 1 and children[0].is_dir():
+        nested = children[0]
+        if (nested / "scenario").exists() and (nested / "fileFormat.txt").exists():
+            return nested
+    return staging
+
+
+def _copy_tree_files(src_dir: Path, dst_dir: Path) -> int:
+    copied = 0
+    for item in src_dir.rglob("*"):
+        if not item.is_file():
+            continue
+        rel = item.relative_to(src_dir)
+        target = dst_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(item, target)
+        copied += 1
+    return copied
+
+
+def _reset_section_dir(task_root: Path, section: str) -> Path:
+    section_dir = task_root / section
+    if section_dir.exists():
+        shutil.rmtree(section_dir)
+    section_dir.mkdir(parents=True, exist_ok=True)
+    readme_content = DIR_READMES.get(
+        section,
+        dedent(
+            f"""\
+            # {section}
+
+            Directory description for `{section}`.
+
+            ## User Notes
+            - ...
+            """
+        ),
+    )
+    write_file(section_dir / "README.md", readme_content)
+    return section_dir
+
+
+def put_section_data(
+    task_input: Path,
+    source_dir: Path,
+    section: str,
+    output_tsk: Path,
+    force: bool,
+    validation_mode: str = "strict",
+) -> int:
+    task_input = task_input.resolve()
+    source_dir = source_dir.resolve()
+    if not source_dir.is_dir():
+        raise NotADirectoryError(f"Source directory not found: {source_dir}")
+
+    with tempfile.TemporaryDirectory(prefix=f"sibgu_put_{section}_") as tmp:
+        staging = Path(tmp) / "staging"
+        candidate = _load_task_to_staging(task_input, staging)
+        section_dir = _reset_section_dir(candidate, section)
+        copied_count = _copy_tree_files(source_dir, section_dir)
+        create_tsk_from_directory(
+            candidate,
+            output_tsk,
+            force=force,
+            validation_mode=validation_mode,
+        )
+        return copied_count
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Utility to create/validate/update .tsk archives.",
@@ -950,12 +1029,18 @@ def parse_args() -> argparse.Namespace:
               createtask.py include base.tsk extra.tsk merged.tsk --force
               createtask.py pack ./task_dir packed.tsk --mode strict
               createtask.py template ./task_template --force
+              createtask.py put-sims task.tsk ./results updated.tsk --force
+              createtask.py put-reports task.tsk ./reports-src updated.tsk --force
+              createtask.py put-logs task.tsk ./logs-src updated.tsk --force
 
             About --force:
               create   : overwrite output .tsk if it already exists.
               include  : overwrite output merged .tsk if it already exists.
               pack     : overwrite output .tsk if it already exists.
               template : delete existing template directory and recreate it.
+              put-sims : overwrite output .tsk if it already exists.
+              put-reports: overwrite output .tsk if it already exists.
+              put-logs : overwrite output .tsk if it already exists.
               valid    : this command does not have --force.
             """
         ),
@@ -1114,6 +1199,102 @@ def parse_args() -> argparse.Namespace:
         help="Recreate template directory if it already exists (delete and create again).",
     )
 
+    put_sims_parser = subparsers.add_parser(
+        "put-sims",
+        help="Recursively copy files into task `sims` directory.",
+        description=(
+            "Copy files recursively from source directory into task `sims`.\n"
+            "Task input can be a directory or a .tsk/.zip archive."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=dedent(
+            """\
+            Examples:
+              createtask.py put-sims task.tsk ./sim_results updated.tsk --force
+              createtask.py put-sims ./task_dir ./sim_results updated.tsk --mode basic
+            """
+        ),
+    )
+    put_sims_parser.add_argument("task_input", type=Path, help="Task input (directory or .tsk/.zip).")
+    put_sims_parser.add_argument("source_dir", type=Path, help="Directory with simulation results to copy.")
+    put_sims_parser.add_argument("output", type=Path, help="Result .tsk file.")
+    put_sims_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Overwrite output .tsk if it already exists.",
+    )
+    put_sims_parser.add_argument(
+        "--mode",
+        choices=("basic", "strict"),
+        default="strict",
+        help="Validation mode before writing output: basic or strict.",
+    )
+
+    put_reports_parser = subparsers.add_parser(
+        "put-reports",
+        help="Recursively copy files into task `reports` directory.",
+        description=(
+            "Copy files recursively from source directory into task `reports`.\n"
+            "Task input can be a directory or a .tsk/.zip archive."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=dedent(
+            """\
+            Examples:
+              createtask.py put-reports task.tsk ./report_files updated.tsk --force
+              createtask.py put-reports ./task_dir ./report_files updated.tsk --mode strict
+            """
+        ),
+    )
+    put_reports_parser.add_argument("task_input", type=Path, help="Task input (directory or .tsk/.zip).")
+    put_reports_parser.add_argument("source_dir", type=Path, help="Directory with report files to copy.")
+    put_reports_parser.add_argument("output", type=Path, help="Result .tsk file.")
+    put_reports_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Overwrite output .tsk if it already exists.",
+    )
+    put_reports_parser.add_argument(
+        "--mode",
+        choices=("basic", "strict"),
+        default="strict",
+        help="Validation mode before writing output: basic or strict.",
+    )
+
+    put_logs_parser = subparsers.add_parser(
+        "put-logs",
+        help="Recursively copy files into task `logs` directory.",
+        description=(
+            "Copy files recursively from source directory into task `logs`.\n"
+            "Task input can be a directory or a .tsk/.zip archive."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=dedent(
+            """\
+            Examples:
+              createtask.py put-logs task.tsk ./log_files updated.tsk --force
+              createtask.py put-logs ./task_dir ./log_files updated.tsk --mode strict
+            """
+        ),
+    )
+    put_logs_parser.add_argument("task_input", type=Path, help="Task input (directory or .tsk/.zip).")
+    put_logs_parser.add_argument("source_dir", type=Path, help="Directory with log files to copy.")
+    put_logs_parser.add_argument("output", type=Path, help="Result .tsk file.")
+    put_logs_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Overwrite output .tsk if it already exists.",
+    )
+    put_logs_parser.add_argument(
+        "--mode",
+        choices=("basic", "strict"),
+        default="strict",
+        help="Validation mode before writing output: basic or strict.",
+    )
+
     if len(sys.argv) == 1:
         parser.print_help()
         raise SystemExit(0)
@@ -1164,6 +1345,42 @@ def main() -> int:
             out_dir = create_task_template_dir(args.output_dir, force=args.force)
             print(f"Done: template directory created {out_dir}")
             print("Fill files and package into .tsk using the pack command.")
+            return 0
+
+        if args.command == "put-sims":
+            copied = put_section_data(
+                task_input=args.task_input,
+                source_dir=args.source_dir,
+                section="sims",
+                output_tsk=args.output,
+                force=args.force,
+                validation_mode=args.mode,
+            )
+            print(f"Done: copied {copied} file(s) into `sims` and created {_normalize_tsk_path(args.output).resolve()}")
+            return 0
+
+        if args.command == "put-reports":
+            copied = put_section_data(
+                task_input=args.task_input,
+                source_dir=args.source_dir,
+                section="reports",
+                output_tsk=args.output,
+                force=args.force,
+                validation_mode=args.mode,
+            )
+            print(f"Done: copied {copied} file(s) into `reports` and created {_normalize_tsk_path(args.output).resolve()}")
+            return 0
+
+        if args.command == "put-logs":
+            copied = put_section_data(
+                task_input=args.task_input,
+                source_dir=args.source_dir,
+                section="logs",
+                output_tsk=args.output,
+                force=args.force,
+                validation_mode=args.mode,
+            )
+            print(f"Done: copied {copied} file(s) into `logs` and created {_normalize_tsk_path(args.output).resolve()}")
             return 0
 
         raise ValueError(f"Unknown command: {args.command}")
