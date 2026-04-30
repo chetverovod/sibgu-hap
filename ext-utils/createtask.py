@@ -1017,6 +1017,40 @@ def put_section_data(
         return copied_count
 
 
+def unpack_tsk_to_directory(
+    input_tsk: Path,
+    output_dir: Path | None,
+    force: bool,
+    validation_mode: str = "strict",
+    skip_validation: bool = False,
+) -> Path:
+    input_tsk = _normalize_tsk_path(input_tsk).resolve()
+    if not input_tsk.exists():
+        raise FileNotFoundError(f"Input .tsk file not found: {input_tsk}")
+    if not zipfile.is_zipfile(input_tsk):
+        raise ValueError(f"Input is not a zip/.tsk archive: {input_tsk}")
+
+    if output_dir is None:
+        output_dir = input_tsk.with_suffix("")
+    output_dir = output_dir.resolve()
+
+    if not skip_validation:
+        issues = validate_tsk_file(input_tsk, mode=validation_mode)
+        if issues:
+            raise ValueError("Validation failed:\n" + "\n".join(f"- {msg}" for msg in issues))
+
+    if output_dir.exists():
+        if not force:
+            raise FileExistsError(
+                f"Output directory already exists: {output_dir}. Use --force to overwrite."
+            )
+        shutil.rmtree(output_dir)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shutil.unpack_archive(str(input_tsk), str(output_dir), format="zip")
+    return output_dir
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Utility to create/validate/update .tsk archives.",
@@ -1032,6 +1066,7 @@ def parse_args() -> argparse.Namespace:
               createtask.py put-sims task.tsk ./results updated.tsk --force
               createtask.py put-reports task.tsk ./reports-src updated.tsk --force
               createtask.py put-logs task.tsk ./logs-src updated.tsk --force
+              createtask.py unpack task.tsk ./out_dir --mode strict
 
             About --force:
               create   : overwrite output .tsk if it already exists.
@@ -1041,6 +1076,7 @@ def parse_args() -> argparse.Namespace:
               put-sims : overwrite output .tsk if it already exists.
               put-reports: overwrite output .tsk if it already exists.
               put-logs : overwrite output .tsk if it already exists.
+              unpack   : overwrite output directory if it already exists.
               valid    : this command does not have --force.
             """
         ),
@@ -1295,6 +1331,50 @@ def parse_args() -> argparse.Namespace:
         help="Validation mode before writing output: basic or strict.",
     )
 
+    unpack_parser = subparsers.add_parser(
+        "unpack",
+        help="Extract a .tsk archive into a directory.",
+        description=(
+            "Extract input .tsk (zip) into a directory.\n"
+            "By default, creates a directory with the same name as the archive."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=dedent(
+            """\
+            Examples:
+              createtask.py unpack task.tsk
+              createtask.py unpack task.tsk ./out_dir
+              createtask.py unpack task.tsk ./out_dir --mode basic
+              createtask.py unpack task.tsk ./out_dir --skip-validation --force
+            """
+        ),
+    )
+    unpack_parser.add_argument("input_tsk", type=Path, help="Path to the .tsk archive.")
+    unpack_parser.add_argument(
+        "output_dir",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Output directory (default: archive name without extension).",
+    )
+    unpack_parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Overwrite output directory if it already exists.",
+    )
+    unpack_parser.add_argument(
+        "--mode",
+        choices=("basic", "strict"),
+        default="strict",
+        help="Validation mode before unpacking (only if --skip-validation is not set).",
+    )
+    unpack_parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip validation and unpack as-is.",
+    )
+
     if len(sys.argv) == 1:
         parser.print_help()
         raise SystemExit(0)
@@ -1381,6 +1461,17 @@ def main() -> int:
                 validation_mode=args.mode,
             )
             print(f"Done: copied {copied} file(s) into `logs` and created {_normalize_tsk_path(args.output).resolve()}")
+            return 0
+
+        if args.command == "unpack":
+            out_dir = unpack_tsk_to_directory(
+                input_tsk=args.input_tsk,
+                output_dir=args.output_dir,
+                force=args.force,
+                validation_mode=args.mode,
+                skip_validation=args.skip_validation,
+            )
+            print(f"Done: unpacked to {out_dir}")
             return 0
 
         raise ValueError(f"Unknown command: {args.command}")

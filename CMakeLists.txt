@@ -13,9 +13,15 @@ endif()
 build_lib(
     LIBNAME sibgu-hap
     SOURCE_FILES model/sibgu-hap.cc
+                 model/orbiter-trajectory-validation.cc
                  helper/sibgu-hap-helper.cc
+                 stats/device-ip-table.cc
+                 stats/pcap-node-tracing.cc
     HEADER_FILES model/sibgu-hap.h
+                 model/orbiter-trajectory-validation.h
                  helper/sibgu-hap-helper.h
+                 stats/device-ip-table.h
+                 stats/pcap-node-tracing.h
     LIBRARIES_TO_LINK ${libcore}
     TEST_SOURCES test/sibgu-hap-test-suite.cc
                  ${examples_as_tests_sources}
