@@ -79,10 +79,75 @@ def read_command_line(command_file: Path) -> str:
 
 
 def has_any_non_hidden_file(path: Path) -> bool:
+    """True if any regular file exists under path (recursive)."""
     for item in path.rglob("*"):
         if item.is_file():
             return True
     return False
+
+
+def _absolutize_sat_traces_positions(scenario_dir: Path) -> None:
+    """
+    sat_traces.txt lists (satId, traceFile). Satellite opens traceFile as given; a bare filename is
+    resolved from the ns-3 process cwd, not from scenario/positions/. Rewrite relative paths to
+    absolute paths under scenario/positions/ so runtask works with temp unpack dirs.
+    """
+    path = scenario_dir / "positions" / "sat_traces.txt"
+    if not path.is_file():
+        return
+    backup = scenario_dir / "positions" / ".sat_traces.runtask_orig"
+    if not backup.exists():
+        shutil.copy2(path, backup)
+    out_lines: list[str] = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("%"):
+            out_lines.append(raw)
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            out_lines.append(raw)
+            continue
+        sat_id, trace = parts[0], parts[1]
+        tp = Path(trace)
+        if tp.is_absolute():
+            out_lines.append(raw)
+            continue
+        if "/" not in trace:
+            resolved = (scenario_dir / "positions" / trace).resolve()
+        else:
+            resolved = (scenario_dir / trace).resolve()
+        out_lines.append(f"{sat_id} {resolved}")
+    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+
+
+def _restore_sat_traces_positions(scenario_dir: Path) -> None:
+    """Undo _absolutize_sat_traces_positions so createtask strict pack/validate stays portable."""
+    backup = scenario_dir / "positions" / ".sat_traces.runtask_orig"
+    path = scenario_dir / "positions" / "sat_traces.txt"
+    if backup.is_file():
+        shutil.move(str(backup), str(path))
+
+
+def _resolve_results_for_report(sims: Path) -> Path | None:
+    """
+    Locate the directory that contains ns-3 / hapsimulator outputs.
+
+    scratch/hapsimulator.cc uses SimulationHelper(simulationName) with
+    simulationName == \"sat-handover-hap\", so results live under
+    <simsDir>/sat-handover-hap/. Older runtask versions incorrectly assumed
+    \"hapsimulator\".
+    """
+    for name in ("sat-handover-hap", "hapsimulator"):
+        candidate = sims / name
+        if candidate.is_dir() and has_any_non_hidden_file(candidate):
+            return candidate
+    for child in sorted(sims.iterdir(), key=lambda p: p.name):
+        if child.is_dir() and has_any_non_hidden_file(child):
+            return child
+    if has_any_non_hidden_file(sims):
+        return sims
+    return None
 
 
 def main() -> int:
@@ -110,6 +175,7 @@ def main() -> int:
         auto_cleanup = True
 
     unpack_dir = temp_root / "task"
+    scenario_dir = unpack_dir / "scenario"
     sims_dir = unpack_dir / "sims"
     logs_dir = unpack_dir / "logs"
     reports_dir = unpack_dir / "reports"
@@ -147,38 +213,47 @@ def main() -> int:
         clear_dir_contents(reports_dir)
         print("[INFO] Cleared temporary sims/logs/reports directories.")
 
-        # 4) Build run command from commandLine.txt + --simsDir
-        command_line_txt = unpack_dir / "commandLine.txt"
-        task_cmd_args = read_command_line(command_line_txt)
-        task_cmd_args = f"{task_cmd_args} --simsDir={str(sims_dir)}"
-        run_command = f'./ns3 run hapsimulator "{task_cmd_args}"'
-        print(f"[INFO] Run command: {run_command}")
-
-        # 5) Run simulation and store full log into logs/simulation.log
-        with log_file.open("w", encoding="utf-8") as lf:
-            lf.write(f"$ {run_command}\n\n")
-            proc = subprocess.run(
-                ["bash", "-lc", run_command],
-                cwd=str(project_root),
-                text=True,
-                capture_output=True,
+        _absolutize_sat_traces_positions(scenario_dir)
+        try:
+            # 4) Build run command from commandLine.txt + --simsDir
+            command_line_txt = unpack_dir / "commandLine.txt"
+            task_cmd_args = read_command_line(command_line_txt)
+            task_cmd_args = (
+                f"{task_cmd_args} --simsDir={str(sims_dir)} --scenarioPath={str(scenario_dir)}"
             )
-            lf.write(proc.stdout or "")
-            if proc.stderr:
-                lf.write("\n[stderr]\n")
-                lf.write(proc.stderr)
-            lf.write(f"\n[exit_code] {proc.returncode}\n")
+            # ns3 treats everything before "--" as build/run options; program args must follow "--".
+            # Each program option must be a separate argv token after "--". A single quoted string
+            # would be passed as one argument, so CommandLine would ignore --simsDir/--scenarioPath
+            # and output would go to the default data/sims tree (task/sims would stay empty).
+            program_argv = shlex.split(task_cmd_args, posix=True)
+            ns3_cmd = ["./ns3", "run", "hapsimulator", "--", *program_argv]
+            run_command_log = " ".join(shlex.quote(part) for part in ns3_cmd)
+            print(f"[INFO] Run command: {run_command_log}")
 
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"Simulation failed with exit code {proc.returncode}. "
-                f"See log file: {log_file}"
-            )
+            # 5) Run simulation and store full log into logs/simulation.log
+            with log_file.open("w", encoding="utf-8") as lf:
+                lf.write(f"$ {run_command_log}\n\n")
+                proc = subprocess.run(
+                    ns3_cmd,
+                    cwd=str(project_root),
+                    text=True,
+                    capture_output=True,
+                )
+                lf.write(proc.stdout or "")
+                if proc.stderr:
+                    lf.write("\n[stderr]\n")
+                    lf.write(proc.stderr)
+                lf.write(f"\n[exit_code] {proc.returncode}\n")
 
-        # 6) Generate PDF report if sims is non-empty
-        if has_any_non_hidden_file(sims_dir):
-            report_results_dir = sims_dir / "hapsimulator"
-            if report_results_dir.exists() and report_results_dir.is_dir():
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"Simulation failed with exit code {proc.returncode}. "
+                    f"See log file: {log_file}"
+                )
+
+            # 6) Generate PDF report if we can find statistics under task/sims
+            report_results_dir = _resolve_results_for_report(sims_dir)
+            if report_results_dir is not None:
                 report_pdf = reports_dir / "results_report.pdf"
                 print(f"[INFO] Generating report from: {report_results_dir}")
                 res = run_cmd(
@@ -194,30 +269,32 @@ def main() -> int:
                 ensure_ok(res, "Report generation")
             else:
                 print(
-                    "[WARNING] sims is non-empty, but expected results directory "
-                    f"was not found: {report_results_dir}"
+                    "[INFO] No result files under task/sims (expected e.g. sat-handover-hap/ after "
+                    "hapsimulator); report generation skipped."
                 )
-        else:
-            print("[INFO] sims directory is empty after simulation; report generation skipped.")
 
-        # 7) Repack modified task into the same file
-        print(f"[INFO] Packing updated task back to: {task_file}")
-        res = run_cmd(
-            [
-                sys.executable,
-                str(createtask),
-                "pack",
-                str(unpack_dir),
-                str(task_file),
-                "--mode",
-                "strict",
-                "--force",
-            ],
-            capture=True,
-        )
-        ensure_ok(res, "Task repack")
-        print("[INFO] Task completed successfully.")
-        return 0
+            # 7) Repack modified task into the same file
+            # Restore portable sat_traces before pack: strict validation uses paths under the task tree.
+            _restore_sat_traces_positions(scenario_dir)
+            print(f"[INFO] Packing updated task back to: {task_file}")
+            res = run_cmd(
+                [
+                    sys.executable,
+                    str(createtask),
+                    "pack",
+                    str(unpack_dir),
+                    str(task_file),
+                    "--mode",
+                    "strict",
+                    "--force",
+                ],
+                capture=True,
+            )
+            ensure_ok(res, "Task repack")
+            print("[INFO] Task completed successfully.")
+            return 0
+        finally:
+            _restore_sat_traces_positions(scenario_dir)
     except Exception as exc:
         print(f"Error: {exc}")
         if args.keep:

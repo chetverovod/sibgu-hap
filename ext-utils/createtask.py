@@ -345,7 +345,6 @@ ALL_DIRS = [
     "scenario/antennapatterns",
     "scenario/antennapatterns/SatAntennaGain_1",
     "scenario/beams",
-    "scenario/beamhopping",
     "scenario/positions",
     "scenario/standard",
     "scenario/waveforms",
