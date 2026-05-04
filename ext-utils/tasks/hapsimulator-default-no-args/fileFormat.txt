@@ -1,0 +1,2 @@
+This archive is a task for SibGu HAP simulator.
+Creator-Version: createtask.py 1.2.0

@@ -1,0 +1,1 @@
+--packetSize=512 --interval=100 --scenarioName=constellation-leo-3-satellites-hap --simulationDuration=2 --enablePcap=false --enableHexDump=false

@@ -1,0 +1,3 @@
+% global throughput_kbps
+0 191.36
+

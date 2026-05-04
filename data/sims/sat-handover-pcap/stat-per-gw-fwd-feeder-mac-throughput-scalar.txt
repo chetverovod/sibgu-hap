@@ -1,0 +1,4 @@
+% gw_id throughput_kbps
+2 129.27
+1 91.4453
+

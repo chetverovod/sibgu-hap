@@ -1,0 +1,21 @@
+.
+├── antennapatterns -> ../../../../satellite/data/additional-input/antennapatterns/SatAntennaGain72BeamsShifted
+├── beams
+│   ├── fwdConf.txt
+│   └── rtnConf.txt
+├── log.txt
+├── positions
+│   ├── gw_positions.txt
+│   ├── isls.txt
+│   ├── sat_traces.txt
+│   ├── start_date.txt
+│   ├── tles.txt
+│   └── ut_positions.txt
+├── README.md
+├── standard
+│   └── standard.txt
+└── waveforms
+    ├── default_waveform.txt
+    └── waveforms.txt
+
+5 directories, 13 files

@@ -1,0 +1,7 @@
+% output_type: 'OUTPUT_TYPE_SUM'
+% count: 8
+% sum: 35.264
+
+% time_sec throughput_kbps
+1 0
+

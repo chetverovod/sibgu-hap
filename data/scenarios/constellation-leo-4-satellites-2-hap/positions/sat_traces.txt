@@ -1,0 +1,3 @@
+% satId traceFile
+2 contrib/sibgu-hap/ext-utils/circular.txt
+3 contrib/sibgu-hap/ext-utils/hap-500km-east.txt
