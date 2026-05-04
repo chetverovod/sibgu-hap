@@ -20,6 +20,11 @@ import zipfile
 
 TOOL_VERSION = "1.2.0"
 
+# Real ns-3 satellite antenna tables are tens of MB per beam file; strict validation must not read
+# every line into RAM. Beyond this size, only a prefix scan is performed (format + ranges).
+ANTENNA_TXT_LARGE_BYTES = 400_000
+ANTENNA_TXT_PREFIX_MEANINGFUL_LINES = 400
+
 
 def make_file_format_content() -> str:
     return (
@@ -629,6 +634,44 @@ def _validate_waveforms(path: Path, default_path: Path, errors: list[str]) -> No
                 errors.append(f"{default_rel} -> ID {default_id} is missing in waveforms.txt.")
 
 
+def _validate_antenna_gain_txt_prefix(txt_path: Path, rel: str, errors: list[str]) -> None:
+    """Validate only the first meaningful rows of a large beam pattern file (streaming)."""
+    if not re.search(r"\d", txt_path.stem):
+        errors.append(f"{rel} -> file name must contain a number (Beam ID).")
+        return
+    meaningful = 0
+    try:
+        with txt_path.open(encoding="utf-8", errors="replace") as fh:
+            for line_no, raw in enumerate(fh, start=1):
+                text = raw.strip()
+                if not text or text.startswith("#") or text.startswith("%"):
+                    continue
+                parts = text.split()
+                if len(parts) != 3:
+                    errors.append(f"{rel}:{line_no} -> expected format: Latitude Longitude Gain_dB.")
+                    return
+                lat = _parse_float(parts[0], "Latitude", errors, rel, line_no)
+                lon = _parse_float(parts[1], "Longitude", errors, rel, line_no)
+                gain_raw = parts[2]
+                if gain_raw.lower() != "nan":
+                    _ = _parse_float(gain_raw, "Gain_dB", errors, rel, line_no)
+                if lat is not None and lon is not None:
+                    if not (-90.0 <= lat <= 90.0):
+                        errors.append(f"{rel}:{line_no} -> Latitude is out of range [-90, 90].")
+                        return
+                    if not (-180.0 <= lon <= 180.0):
+                        errors.append(f"{rel}:{line_no} -> Longitude is out of range [-180, 180].")
+                        return
+                meaningful += 1
+                if meaningful >= ANTENNA_TXT_PREFIX_MEANINGFUL_LINES:
+                    return
+    except OSError as exc:
+        errors.append(f"{rel} -> cannot read file: {exc}")
+        return
+    if meaningful == 0:
+        errors.append(f"{rel} -> file appears empty (no data lines in prefix scan).")
+
+
 def _validate_antennapatterns(root: Path, errors: list[str]) -> None:
     base = root / "scenario/antennapatterns"
     rel_base = "scenario/antennapatterns"
@@ -663,6 +706,16 @@ def _validate_antennapatterns(root: Path, errors: list[str]) -> None:
         rel = txt_path.relative_to(root).as_posix()
         if not re.search(r"\d", txt_path.stem):
             errors.append(f"{rel} -> file name must contain a number (Beam ID).")
+            continue
+        try:
+            fsz = txt_path.stat().st_size
+        except OSError as exc:
+            errors.append(f"{rel} -> cannot stat file: {exc}")
+            continue
+        if fsz >= ANTENNA_TXT_LARGE_BYTES:
+            _validate_antenna_gain_txt_prefix(txt_path, rel, errors)
+            continue
+
         rows = _iter_nonempty_noncomment_lines(_safe_read_text(txt_path), ("#", "%"))
         if not rows:
             continue

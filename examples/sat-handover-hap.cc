@@ -195,13 +195,15 @@ main(int argc, char* argv[])
 
     simulationHelper->EnableProgressLogs();
 
+    NS_LOG_UNCOND("Configured simulator stop time (virtual): "
+                  << simulationHelper->GetSimTime().GetSeconds() << " s");
     const auto simulationStart = std::chrono::steady_clock::now();
     simulationHelper->RunSimulation();
     const auto simulationEnd = std::chrono::steady_clock::now();
     const auto simulationElapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(simulationEnd - simulationStart);
-    NS_LOG_UNCOND("Simulation wall-clock time: " << (simulationElapsed.count() / 1000.0)
-                                                 << " s");
+    NS_LOG_UNCOND("Simulation wall-clock time (CPU, not virtual sim time): "
+                  << (simulationElapsed.count() / 1000.0) << " s");
 
     return 0;
 }

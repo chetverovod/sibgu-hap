@@ -70,12 +70,31 @@ def read_command_line(command_file: Path) -> str:
     if not command_file.exists():
         raise FileNotFoundError(f"commandLine.txt not found: {command_file}")
     raw = command_file.read_text(encoding="utf-8", errors="replace")
+    parts: list[str] = []
     for line in raw.splitlines():
         text = line.strip()
         if not text or text.startswith("#"):
             continue
-        return text
-    raise ValueError("commandLine.txt does not contain a runnable command line.")
+        parts.append(text)
+    if not parts:
+        raise ValueError("commandLine.txt does not contain a runnable command line.")
+    # Join wrapped editor lines and collapse whitespace so tokens like --simulationDuration= stay intact.
+    return " ".join(" ".join(parts).split())
+
+
+def build_ns3_hapsimulator_shell_command(program_argv: list[str]) -> str:
+    """
+    Shell form expected by users and ns3: ./ns3 run "hapsimulator <argv...>"
+    (one argv to `run`, same as interactive copy-paste).
+    """
+    inner = "hapsimulator " + " ".join(program_argv)
+    escaped = (
+        inner.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("$", "\\$")
+        .replace("`", "\\`")
+    )
+    return f'./ns3 run "{escaped}"'
 
 
 def has_any_non_hidden_file(path: Path) -> bool:
@@ -218,23 +237,18 @@ def main() -> int:
             # 4) Build run command from commandLine.txt + --simsDir
             command_line_txt = unpack_dir / "commandLine.txt"
             task_cmd_args = read_command_line(command_line_txt)
-            task_cmd_args = (
-                f"{task_cmd_args} --simsDir={str(sims_dir)} --scenarioPath={str(scenario_dir)}"
-            )
-            # ns3 treats everything before "--" as build/run options; program args must follow "--".
-            # Each program option must be a separate argv token after "--". A single quoted string
-            # would be passed as one argument, so CommandLine would ignore --simsDir/--scenarioPath
-            # and output would go to the default data/sims tree (task/sims would stay empty).
             program_argv = shlex.split(task_cmd_args, posix=True)
-            ns3_cmd = ["./ns3", "run", "hapsimulator", "--", *program_argv]
-            run_command_log = " ".join(shlex.quote(part) for part in ns3_cmd)
-            print(f"[INFO] Run command: {run_command_log}")
+            program_argv.append(f"--simsDir={sims_dir}")
+            program_argv.append(f"--scenarioPath={scenario_dir}")
+            run_command_shell = build_ns3_hapsimulator_shell_command(program_argv)
+            print(f"[INFO] Run command: {run_command_shell}")
 
             # 5) Run simulation and store full log into logs/simulation.log
             with log_file.open("w", encoding="utf-8") as lf:
-                lf.write(f"$ {run_command_log}\n\n")
+                lf.write(f"$ {run_command_shell}\n\n")
                 proc = subprocess.run(
-                    ns3_cmd,
+                    run_command_shell,
+                    shell=True,
                     cwd=str(project_root),
                     text=True,
                     capture_output=True,
