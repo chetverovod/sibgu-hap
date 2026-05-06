@@ -148,6 +148,13 @@ def _restore_sat_traces_positions(scenario_dir: Path) -> None:
         shutil.move(str(backup), str(path))
 
 
+def _print_simulation_log_to_console(log_path: Path) -> None:
+    """Echo full simulation log to the console (stderr) after failure."""
+    body = log_path.read_text(encoding="utf-8", errors="replace")
+    print("\n--- simulation.log ---", file=sys.stderr)
+    sys.stderr.write(body)
+
+
 def _resolve_results_for_report(sims: Path) -> Path | None:
     """
     Locate the directory that contains ns-3 / hapsimulator outputs.
@@ -260,6 +267,7 @@ def main() -> int:
                 lf.write(f"\n[exit_code] {proc.returncode}\n")
 
             if proc.returncode != 0:
+                _print_simulation_log_to_console(log_file)
                 raise RuntimeError(
                     f"Simulation failed with exit code {proc.returncode}. "
                     f"See log file: {log_file}"
