@@ -90,7 +90,7 @@ def build_ns3_hapsimulator_shell_command(program_argv: list[str]) -> str:
     Shell form expected by users and ns3: ./ns3 run "hapsimulator <argv...>"
     (one argv to `run`, same as interactive copy-paste).
     """
-    inner = "hapsimulator3 " + " ".join(program_argv)  # Change to "hapsimulator"
+    inner = "hapsimulator " + " ".join(program_argv)  # Change to "hapsimulator"
     escaped = (
         inner.replace("\\", "\\\\")
         .replace('"', '\\"')
@@ -367,7 +367,7 @@ def main() -> int:
             success_count += 1
 
     print(
-        "[INFO] Summary: "
+        "[INFO] Tasks summary: "
         f"successful={success_count}, failed={failed_count}, total={success_count + failed_count}"
     )
     return 1 if any_failed else 0

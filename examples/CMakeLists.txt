@@ -128,3 +128,15 @@ build_lib_example(
                        ${libtraffic}
 )
 
+build_lib_example(
+    NAME hapsimulator
+    SOURCE_FILES hapsimulator.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libapplications}
+                       ${libconfig-store}
+                       ${libinternet}
+                       ${libnetwork}
+                       ${libsatellite}
+                       ${libtraffic}
+)
+
