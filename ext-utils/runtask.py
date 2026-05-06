@@ -11,17 +11,20 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate, unpack, run, report, and repack a .tsk task file."
+        description="Validate, unpack, run, report, and repack one or more .tsk task files.",
+        usage="%(prog)s [-h] [--keep] task_file1 [task_file2 ...]",
     )
     parser.add_argument(
-        "task_file",
+        "task_files",
+        nargs="+",
         type=Path,
-        help="Path to input task file (.tsk). The file is updated in place on success.",
+        help="Path(s) to input task file(s) (.tsk). Each file is updated in place on success.",
     )
     parser.add_argument(
         "--keep",
@@ -176,15 +179,17 @@ def _resolve_results_for_report(sims: Path) -> Path | None:
     return None
 
 
-def main() -> int:
-    args = parse_args()
+def run_single_task(
+    task_file: Path,
+    *,
+    project_root: Path,
+    createtask: Path,
+    genreport: Path,
+    keep: bool,
+) -> int:
+    """Run one task file; return 0 on success, 1 on failure."""
 
-    script_dir = Path(__file__).resolve().parent
-    project_root = script_dir.parents[2]  # .../ns-3.43
-    createtask = script_dir / "createtask.py"
-    genreport = script_dir / "genreport.py"
-
-    task_file = args.task_file.resolve()
+    task_file = task_file.resolve()
     if task_file.suffix.lower() != ".tsk":
         task_file = task_file.with_suffix(".tsk")
 
@@ -192,7 +197,8 @@ def main() -> int:
         print(f"Error: task file not found: {task_file}")
         return 1
 
-    if args.keep:
+    temp_ctx: tempfile.TemporaryDirectory[str] | None = None
+    if keep:
         temp_root = Path(tempfile.mkdtemp(prefix="sibgu_runtask_"))
         auto_cleanup = False
     else:
@@ -319,14 +325,52 @@ def main() -> int:
             _restore_sat_traces_positions(scenario_dir)
     except Exception as exc:
         print(f"Error: {exc}")
-        if args.keep:
+        if keep:
             print(f"[INFO] Temporary directory kept: {temp_root}")
         return 1
     finally:
-        if auto_cleanup:
+        if auto_cleanup and temp_ctx is not None:
             temp_ctx.cleanup()
-        elif args.keep:
+        elif keep:
             print(f"[INFO] Temporary directory kept: {temp_root}")
+
+
+def main() -> int:
+    args = parse_args()
+
+    script_dir = Path(__file__).resolve().parent
+    project_root = script_dir.parents[2]  # .../ns-3.43
+    createtask = script_dir / "createtask.py"
+    genreport = script_dir / "genreport.py"
+
+    any_failed = False
+    success_count = 0
+    failed_count = 0
+    for task_path in args.task_files:
+        label = task_path.resolve()
+        if label.suffix.lower() != ".tsk":
+            label = label.with_suffix(".tsk")
+        t0 = time.perf_counter()
+        rc = run_single_task(
+            task_path,
+            project_root=project_root,
+            createtask=createtask,
+            genreport=genreport,
+            keep=args.keep,
+        )
+        elapsed_s = time.perf_counter() - t0
+        print(f"[INFO] Task finished in {elapsed_s:.1f} s: {label}")
+        if rc != 0:
+            any_failed = True
+            failed_count += 1
+        else:
+            success_count += 1
+
+    print(
+        "[INFO] Summary: "
+        f"successful={success_count}, failed={failed_count}, total={success_count + failed_count}"
+    )
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":
