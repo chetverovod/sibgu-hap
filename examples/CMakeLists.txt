@@ -116,3 +116,15 @@ build_lib_example(
                        ${libflow-monitor}
 )
 
+build_lib_example(
+    NAME hapsimulator3
+    SOURCE_FILES hapsimulator3.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libapplications}
+                       ${libconfig-store}
+                       ${libinternet}
+                       ${libnetwork}
+                       ${libsatellite}
+                       ${libtraffic}
+)
+

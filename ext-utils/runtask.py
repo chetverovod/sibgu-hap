@@ -87,7 +87,7 @@ def build_ns3_hapsimulator_shell_command(program_argv: list[str]) -> str:
     Shell form expected by users and ns3: ./ns3 run "hapsimulator <argv...>"
     (one argv to `run`, same as interactive copy-paste).
     """
-    inner = "hapsimulator " + " ".join(program_argv)
+    inner = "hapsimulator3 " + " ".join(program_argv)  # Change to "hapsimulator"
     escaped = (
         inner.replace("\\", "\\\\")
         .replace('"', '\\"')

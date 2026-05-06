@@ -23,6 +23,9 @@ build_lib(
                  stats/device-ip-table.h
                  stats/pcap-node-tracing.h
     LIBRARIES_TO_LINK ${libcore}
+                      ${libnetwork}
+                      ${libinternet}
+                      ${libsatellite}
     TEST_SOURCES test/sibgu-hap-test-suite.cc
                  ${examples_as_tests_sources}
 )
