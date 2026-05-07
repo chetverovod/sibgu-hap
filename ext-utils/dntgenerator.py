@@ -125,6 +125,16 @@ def parse_args() -> argparse.Namespace:
                    --db-name hapnet --db-user igor --db-password secret \\
                    --schema public --nodes-table nodes --routes-table routes \\
                    --output my.dnt
+
+              4) Build a static snapshot from an existing DNT:
+                 %(prog)s --snapshot source.dnt 10.500000
+
+              5) Build another snapshot (microsecond precision):
+                 %(prog)s --snapshot source.dnt 123.000001
+
+              6) Snapshot behavior for HS_ACTIVITY:
+                 if activity resolves to "off" at snapshot time,
+                 the corresponding edge is removed from graph.dot
             """
         ),
     )
@@ -162,6 +172,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Validate an existing .dnt archive and exit.",
+    )
+    parser.add_argument(
+        "--snapshot",
+        nargs=2,
+        metavar=("INPUT_DNT", "TIME_SECONDS"),
+        default=None,
+        help=(
+            "Build a static snapshot .dnt from INPUT_DNT at TIME_SECONDS "
+            "(supports microsecond precision)."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -204,6 +224,227 @@ def validate_dnt_file(input_path: Path) -> list[str]:
     except zipfile.BadZipFile:
         return [f"Unable to read zip archive: {dnt_path}"]
     return errors
+
+
+def _split_attr_items(attr_blob: str) -> list[str]:
+    items: list[str] = []
+    token: list[str] = []
+    in_quotes = False
+    escaped = False
+    for ch in attr_blob:
+        if escaped:
+            token.append(ch)
+            escaped = False
+            continue
+        if ch == "\\" and in_quotes:
+            token.append(ch)
+            escaped = True
+            continue
+        if ch == '"':
+            in_quotes = not in_quotes
+            token.append(ch)
+            continue
+        if ch == "," and not in_quotes:
+            part = "".join(token).strip()
+            if part:
+                items.append(part)
+            token = []
+            continue
+        token.append(ch)
+    part = "".join(token).strip()
+    if part:
+        items.append(part)
+    return items
+
+
+def _unquote_dot_value(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
+        inner = text[1:-1]
+        return inner.replace('\\"', '"').replace("\\\\", "\\")
+    return text
+
+
+def _parse_dot_attrs(attr_blob: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for item in _split_attr_items(attr_blob):
+        if "=" not in item:
+            continue
+        key, raw_val = item.split("=", 1)
+        out.append((key.strip(), _unquote_dot_value(raw_val)))
+    return out
+
+
+def _interp_linear(x0: float, y0: float, x1: float, y1: float, x: float) -> float:
+    if x1 == x0:
+        return y0
+    return y0 + (y1 - y0) * ((x - x0) / (x1 - x0))
+
+
+def _interp_series(times: list[float], values: list[float], t: float) -> float:
+    if not times:
+        raise ValueError("Interpolation series is empty.")
+    if t <= times[0]:
+        return values[0]
+    if t >= times[-1]:
+        return values[-1]
+    for i in range(1, len(times)):
+        if t <= times[i]:
+            return _interp_linear(times[i - 1], values[i - 1], times[i], values[i], t)
+    return values[-1]
+
+
+def _read_noncomment_rows(path: Path) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("%") or line.startswith("#"):
+            continue
+        rows.append(line.split())
+    return rows
+
+
+def _resolve_trajectory_csv(path: Path, t: float) -> str:
+    rows = _read_noncomment_rows(path)
+    if not rows:
+        raise ValueError(f"Trajectory file is empty: {path}")
+    times: list[float] = []
+    lats: list[float] = []
+    lons: list[float] = []
+    alts: list[float] = []
+    for row in rows:
+        if len(row) < 4:
+            raise ValueError(f"Trajectory row must be: time lat lon alt in {path}")
+        times.append(float(row[0]))
+        lats.append(float(row[1]))
+        lons.append(float(row[2]))
+        alts.append(float(row[3]))
+    lat = _interp_series(times, lats, t)
+    lon = _interp_series(times, lons, t)
+    alt = _interp_series(times, alts, t)
+    return ",".join((_format_number(lat), _format_number(lon), _format_number(alt)))
+
+
+def _resolve_scalar_from_file(path: Path, t: float) -> str:
+    rows = _read_noncomment_rows(path)
+    if not rows:
+        raise ValueError(f"Scalar time-series file is empty: {path}")
+    times: list[float] = []
+    values: list[float] = []
+    for row in rows:
+        if len(row) < 2:
+            raise ValueError(f"Scalar row must be: time value in {path}")
+        times.append(float(row[0]))
+        values.append(float(row[1]))
+    return _format_number(_interp_series(times, values, t))
+
+
+def _state_to_float(state: str) -> float:
+    s = state.strip().lower()
+    if s in {"on", "1", "true"}:
+        return 1.0
+    if s in {"off", "0", "false", "of"}:
+        return 0.0
+    raise ValueError(f"Unsupported activity state: {state}")
+
+
+def _resolve_activity_from_file(path: Path, t: float) -> str:
+    rows = _read_noncomment_rows(path)
+    if not rows:
+        raise ValueError(f"Activity file is empty: {path}")
+    pairs: list[tuple[float, float]] = []
+    for row in rows:
+        if len(row) < 2:
+            raise ValueError(f"Activity row must be: time state in {path}")
+        pairs.append((float(row[0]), _state_to_float(row[1])))
+    pairs.sort(key=lambda x: x[0])
+    # Step-wise behavior: use the state from the latest row at or before snapshot time.
+    selected = pairs[0][1]
+    for ts, state in pairs:
+        if ts <= t:
+            selected = state
+        else:
+            break
+    return "on" if selected >= 0.5 else "off"
+
+
+def _format_dot_attr(key: str, value: str) -> str:
+    if key in {"HS_LEN", "HS_BEAM", "HS_CENTER_FREQ", "HS_BANDWIDTH", "HS_FADING"} and _is_numeric_token(value):
+        return f"{key}={value}"
+    if key == "HS_ACTIVITY" and value in {"on", "off"}:
+        return f"{key}={value}"
+    return f"{key}={_dot_quote(value)}"
+
+
+def _snapshot_graph(dot_path: Path, net_dir: Path, t: float) -> None:
+    node_re = re.compile(r'^\s*"([^"]+)"\s*\[(.*)\]\s*;\s*$')
+    edge_re = re.compile(r'^\s*"([^"]+)"\s*->\s*"([^"]+)"\s*\[(.*)\]\s*;\s*$')
+    out_lines: list[str] = []
+
+    for raw in dot_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        edge_m = edge_re.match(raw)
+        if edge_m:
+            src, dst, attrs_blob = edge_m.group(1), edge_m.group(2), edge_m.group(3)
+            attrs = _parse_dot_attrs(attrs_blob)
+            new_attrs: list[tuple[str, str]] = []
+            drop_edge = False
+            for key, val in attrs:
+                new_val = val
+                if key == "HS_BEAM_DIR" and not _is_lat_lon_alt_csv(val):
+                    new_val = _resolve_trajectory_csv(net_dir / _sanitize_filename(val), t)
+                elif key == "HS_FADING" and not _is_numeric_token(val):
+                    new_val = _resolve_scalar_from_file(net_dir / _sanitize_filename(val), t)
+                elif key == "HS_ACTIVITY":
+                    v = val.strip().lower()
+                    if v not in {"on", "off"}:
+                        v = _resolve_activity_from_file(net_dir / _sanitize_filename(val), t)
+                    new_val = v
+                    if v == "off":
+                        drop_edge = True
+                new_attrs.append((key, new_val))
+            if not drop_edge:
+                attrs_text = ", ".join(_format_dot_attr(k, v) for k, v in new_attrs)
+                out_lines.append(f'  "{src}" -> "{dst}" [{attrs_text}];')
+            continue
+
+        node_m = node_re.match(raw)
+        if node_m:
+            node_id, attrs_blob = node_m.group(1), node_m.group(2)
+            attrs = _parse_dot_attrs(attrs_blob)
+            new_attrs: list[tuple[str, str]] = []
+            for key, val in attrs:
+                new_val = val
+                if key == "HS_POS" and not _is_lat_lon_alt_csv(val):
+                    new_val = _resolve_trajectory_csv(net_dir / _sanitize_filename(val), t)
+                new_attrs.append((key, new_val))
+            attrs_text = ", ".join(_format_dot_attr(k, v) for k, v in new_attrs)
+            out_lines.append(f'  "{node_id}" [{attrs_text}];')
+            continue
+
+        out_lines.append(raw)
+
+    dot_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+
+
+def generate_snapshot_archive(input_dnt: Path, snapshot_time: float) -> Path:
+    issues = validate_dnt_file(input_dnt)
+    if issues:
+        raise ValueError("Input .dnt is invalid:\n" + "\n".join(f"- {x}" for x in issues))
+
+    source = _normalize_dnt_path(input_dnt).resolve()
+    time_label = f"{snapshot_time:.6f}".rstrip("0").rstrip(".")
+    output = source.with_name(f"{source.stem}_{time_label}.dnt")
+
+    with tempfile.TemporaryDirectory(prefix="sibgu_dnt_snapshot_") as tmp:
+        root = Path(tmp) / "dnt"
+        root.mkdir(parents=True, exist_ok=True)
+        shutil.unpack_archive(str(source), str(root), format="zip")
+        net_dir = root / "net"
+        dot_path = net_dir / "graph.dot"
+        if not dot_path.is_file():
+            raise FileNotFoundError(f"Missing graph.dot in archive: {source}")
+        _snapshot_graph(dot_path, net_dir, snapshot_time)
+        return _pack_dnt(output, root, force=False)
 
 
 def _dot_quote(value: str) -> str:
@@ -673,8 +914,18 @@ def main() -> int:
             print(f"OK: {_normalize_dnt_path(args.validate).resolve()} is valid.")
             return 0
 
+        if args.snapshot is not None:
+            snap_input = Path(args.snapshot[0])
+            try:
+                snap_time = float(args.snapshot[1])
+            except ValueError as exc:
+                raise ValueError(f"Invalid snapshot time value: {args.snapshot[1]}") from exc
+            archive = generate_snapshot_archive(snap_input, snap_time)
+            print(f"Done: snapshot archive created {archive}")
+            return 0
+
         if args.output is None:
-            raise ValueError("--output is required unless --validate is used.")
+            raise ValueError("--output is required unless --validate or --snapshot is used.")
 
         if args.template:
             archive = generate_template_archive(args.output, force=args.force)
