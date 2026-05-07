@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate a directed network graph (.dot) and package it into a .tpl archive.
+Generate a directed network graph (.dot) and package it into a .dnt file.
+The file is a zip archive with the following structure:
 
 Archive layout:
-  <output>.tpl
+  <output>.dnt
+    README.md
+    db_template.sql
     net/
       graph.dot
       ... optional referenced files (trajectory/activity/fading)
@@ -12,7 +15,7 @@ Input data source:
   PostgreSQL tables (default: public.nodes, public.routes)
 
 Expected columns (minimal):
-  nodes:
+  Table "nodes":
     - id
     - hs_type                 (SAT | HAP | GW | UT)
     - lat, lon, alt
@@ -20,7 +23,7 @@ Expected columns (minimal):
     - trajectory_file         (optional)
     - trajectory_content      (optional text content for trajectory_file)
 
-  routes:
+  Table "routes":
     - src_id, dst_id
     - hs_len
     - hs_beam
@@ -32,8 +35,8 @@ Expected columns (minimal):
     - activity_content        (optional text content for hs_activity if it is filename)
 
 README / quick start:
-  1) Generate template archive:
-     ./netgenerator.py --template --output my.tpl
+  1) Generate template graph:
+     ./netgenerator.py --template --output my.dnt
 
   2) Generate from PostgreSQL via DSN:
      ./netgenerator.py \
@@ -41,14 +44,14 @@ README / quick start:
        --schema public \
        --nodes-table nodes \
        --routes-table routes \
-       --output my.tpl
+       --output my.dnt
 
   3) Generate from PostgreSQL via separate flags:
      ./netgenerator.py \
        --db-host 127.0.0.1 --db-port 5432 \
        --db-name hapnet --db-user igor --db-password secret \
        --schema public --nodes-table nodes --routes-table routes \
-       --output my.tpl
+       --output my.dnt
 """
 
 from __future__ import annotations
@@ -99,13 +102,13 @@ class RouteRow:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Synthesize a directed network graph from PostgreSQL and pack it into .tpl.",
+        description="Synthesize a directed network graph from PostgreSQL and pack it into .dnt.",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=dedent(
             """\
             Examples:
               1) Generate template archive:
-                 %(prog)s --template --output my.tpl
+                 %(prog)s --template --output my.dnt
 
               2) Generate from PostgreSQL via DSN:
                  %(prog)s \\
@@ -113,14 +116,14 @@ def parse_args() -> argparse.Namespace:
                    --schema public \\
                    --nodes-table nodes \\
                    --routes-table routes \\
-                   --output my.tpl
+                   --output my.dnt
 
               3) Generate from PostgreSQL via separate flags:
                  %(prog)s \\
                    --db-host 127.0.0.1 --db-port 5432 \\
                    --db-name hapnet --db-user igor --db-password secret \\
                    --schema public --nodes-table nodes --routes-table routes \\
-                   --output my.tpl
+                   --output my.dnt
             """
         ),
     )
@@ -128,12 +131,12 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         required=True,
-        help="Output .tpl archive path (for example: my.tpl).",
+        help="Output .dnt archive path (for example: my.dnt).",
     )
     parser.add_argument(
         "--template",
         action="store_true",
-        help="Generate a template .tpl archive instead of reading PostgreSQL.",
+        help="Generate a template .dnt archive instead of reading PostgreSQL.",
     )
     parser.add_argument("--dsn", default="", help="Full PostgreSQL DSN string.")
     parser.add_argument("--db-host", default="localhost", help="PostgreSQL host.")
@@ -157,8 +160,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _normalize_tpl_path(path: Path) -> Path:
-    return path if path.suffix.lower() == ".tpl" else path.with_suffix(".tpl")
+def _normalize_dnt_path(path: Path) -> Path:
+    return path if path.suffix.lower() == ".dnt" else path.with_suffix(".dnt")
 
 
 def _dot_quote(value: str) -> str:
@@ -487,7 +490,11 @@ def _write_template(net_dir: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (net_dir.parent / "db_template.sql").write_text(
+    _write_sql_template(net_dir.parent)
+
+
+def _write_sql_template(root_dir: Path) -> None:
+    (root_dir / "db_template.sql").write_text(
         dedent(
             """\
             -- Minimal schema template for netgenerator.py
@@ -522,8 +529,30 @@ def _write_template(net_dir: Path) -> None:
     )
 
 
-def _pack_tpl(output_path: Path, source_dir: Path, force: bool) -> Path:
-    out = _normalize_tpl_path(output_path).resolve()
+def _write_root_readme(root_dir: Path) -> None:
+    (root_dir / "README.md").write_text(
+        dedent(
+            """\
+            # Dynamic Network Topology Archive (.dnt)
+
+            This archive stores a dynamic network topology.
+
+            ## Archive contents
+            - `net/graph.dot` - a directed network graph (nodes and directed edges).
+            - `net/*.txt` - referenced trajectory, link activity, and/or fading files.
+            - `db_template.sql` - SQL schema template for `nodes` and `routes` tables.
+
+            ## SQL file description
+            The `db_template.sql` file in the archive root describes the minimal
+            PostgreSQL table structure expected by `netgenerator.py`.
+            """
+        ),
+        encoding="utf-8",
+    )
+
+
+def _pack_dnt(output_path: Path, source_dir: Path, force: bool) -> Path:
+    out = _normalize_dnt_path(output_path).resolve()
     if out.exists() and not force:
         raise FileExistsError(f"File already exists: {out}. Use --force to overwrite.")
     if out.exists():
@@ -541,7 +570,8 @@ def generate_template_archive(output_path: Path, force: bool) -> Path:
         net_dir = root / "net"
         net_dir.mkdir(parents=True, exist_ok=True)
         _write_template(net_dir)
-        return _pack_tpl(output_path, root, force=force)
+        _write_root_readme(root)
+        return _pack_dnt(output_path, root, force=force)
 
 
 def generate_from_db(args: argparse.Namespace) -> Path:
@@ -557,7 +587,9 @@ def generate_from_db(args: argparse.Namespace) -> Path:
         net_dir = root / "net"
         net_dir.mkdir(parents=True, exist_ok=True)
         _render_dot(args.graph_name, nodes, routes, net_dir)
-        return _pack_tpl(args.output, root, force=args.force)
+        _write_sql_template(root)
+        _write_root_readme(root)
+        return _pack_dnt(args.output, root, force=args.force)
 
 
 def main() -> int:
