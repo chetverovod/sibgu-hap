@@ -2,434 +2,431 @@
 
 *Директория: /home/igor/workspace_ns3.43/ns-3.43/contrib/sibgu-hap/examples*
 
-## Файл: `cli_logs_display.py`
+## Файл: `hapsimulator.cc`
 
-```c
-#!/usr/bin/env python3
+```cpp
+/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+/*
+ * Copyright (c) 2026 Reshetnev University
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation;
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ * Author: Igor Plastov <chetverovod@gmail.com> Reshetnev University
+ *
+ */
 
-# Copyright (c) 2018
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License version 2 as
-# published by the Free Software Foundation;
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-#
-# Adapted CLI Viewer for generic PacketTrace
-#
+#include "ns3/applications-module.h"
+#include "ns3/config-store-module.h"
+#include "ns3/core-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/network-module.h"
+#include "ns3/satellite-module.h"
+#include "ns3/traffic-module.h"
+#include "ns3/trace-helper.h"
+#include "ns3/satellite-env-variables.h"
+#include "ns3/system-path.h"
+#include "ns3/satellite-net-device.h"
+#include "ns3/satellite-typedefs.h"
+#include "ns3/satellite-enums.h"
+#include "../stats/device-ip-table.h"
+#include "../model/orbiter-trajectory-validation.h"
+#include "../stats/pcap-node-tracing.h"
+#include <chrono>
+#include <filesystem>
+#include <sstream>
+#include <string>
+#include <tuple>
+#include <vector>
 
-import os
-import sys
-import argparse
-import bisect
-import re  # Добавлено для парсинга фильтра устройств
+using namespace ns3;
 
-import cli_logs_parser
+#define TEST_NAME "hapsimulator"
+NS_LOG_COMPONENT_DEFINE(TEST_NAME);
 
-# ANSI цвета для консоли
-class Colors:
-    RESET = '\033[0m'
-    BOLD = '\033[1m'
+namespace
+{
+
+constexpr const char* kHapDataRoot = "contrib/sibgu-hap/data";
+
+void
+AddIssueIf(bool bad, const std::string& message, std::vector<std::string>& issues)
+{
+    if (bad)
+    {
+        issues.push_back(message);
+    }
+}
+
+void
+ValidateCliInputs(float simulationDuration,
+                  float interval,
+                  uint32_t packetSize,
+                  const std::string& simsDir,
+                  std::vector<std::string>& issues)
+{
+    AddIssueIf(simulationDuration <= 0.0f, "simulationDuration must be > 0 (seconds).", issues);
+    AddIssueIf(interval <= 0.0f, "interval must be > 0 (milliseconds between CBR packets).", issues);
+    AddIssueIf(packetSize == 0, "packetSize must be > 0.", issues);
+    if (simsDir.empty())
+    {
+        issues.push_back("simsDir is empty.");
+    }
+}
+
+void
+ValidateScenarioLayout(const std::string& scenarioRoot, std::vector<std::string>& issues)
+{
+    namespace fs = std::filesystem;
+
+    if (!fs::exists(scenarioRoot) || !fs::is_directory(scenarioRoot))
+    {
+        issues.push_back("Scenario directory not found: " + scenarioRoot +
+                         " - run from the ns-3 tree root (relative paths), or fix --scenarioName / "
+                         "--scenarioPath / DataPath.");
+        return;
+    }
+
+    const auto fileOk = [&](const std::string& rel) {
+        const std::string p = scenarioRoot + rel;
+        return fs::is_regular_file(p);
+    };
+    const auto dirOk = [&](const std::string& rel) {
+        const std::string p = scenarioRoot + rel;
+        return fs::exists(p) && fs::is_directory(p);
+    };
+
+    AddIssueIf(!fileOk("/standard/standard.txt"),
+               "Missing: " + scenarioRoot + "/standard/standard.txt (DVB/LORA and frame settings).",
+               issues);
+    AddIssueIf(!fileOk("/beams/fwdConf.txt"), "Missing: " + scenarioRoot + "/beams/fwdConf.txt", issues);
+    AddIssueIf(!fileOk("/beams/rtnConf.txt"), "Missing: " + scenarioRoot + "/beams/rtnConf.txt", issues);
+    AddIssueIf(!dirOk("/waveforms"), "Missing directory: " + scenarioRoot + "/waveforms", issues);
+    AddIssueIf(!fileOk("/positions/ut_positions.txt"),
+               "Missing: " + scenarioRoot + "/positions/ut_positions.txt",
+               issues);
+    AddIssueIf(!fileOk("/positions/gw_positions.txt"),
+               "Missing: " + scenarioRoot + "/positions/gw_positions.txt",
+               issues);
+
+    const std::string pos = scenarioRoot + "/positions/";
+    const bool hasTles = fs::is_regular_file(pos + "tles.txt");
+    const bool hasSatPos = fs::is_regular_file(pos + "sat_positions.txt");
+    AddIssueIf(!hasTles && !hasSatPos,
+               "Need either " + pos + "tles.txt (constellation) or " + pos +
+                   "sat_positions.txt (static GEO).",
+               issues);
+    if (hasTles && !fs::is_regular_file(pos + "start_date.txt"))
+    {
+        issues.push_back("tles.txt present but missing " + pos + "start_date.txt (epoch for SGP4).");
+    }
+
+    AddIssueIf(!dirOk("/antennapatterns"),
+               "Missing directory: " + scenarioRoot +
+                   "/antennapatterns - SatAntennaGainPatternContainer will fail (see GeoPos.in). "
+                   "Symlink or copy e.g. from contrib/sibgu-hap/data/scenarios/geo-33E-hap/antennapatterns.",
+               issues);
+    AddIssueIf(!fileOk("/antennapatterns/GeoPos.in"),
+               "Missing: " + scenarioRoot +
+                   "/antennapatterns/GeoPos.in - required for default antenna GEO reference.",
+               issues);
+}
+
+void
+PrintIssuesAndAbort(const std::vector<std::string>& issues)
+{
+    if (issues.empty())
+    {
+        return;
+    }
+    NS_LOG_UNCOND("[hapsimulator3] Input / scenario validation failed:");
+    for (const auto& line : issues)
+    {
+        NS_LOG_UNCOND("  * " << line);
+    }
+    NS_LOG_UNCOND("[hapsimulator3] PacketTrace.log may stay header-only when scenario creation fails "
+                  "or traffic cannot traverse PHY/MAC/channel.");
+    NS_FATAL_ERROR("hapsimulator3: fix the listed issues and re-run.");
+}
+
+void
+PrintRuntimeHints()
+{
+    NS_LOG_UNCOND("[hapsimulator3] Scenario layout OK. If PacketTrace.log stays header-only, the "
+                  "stack is not carrying frames (geometry vs antenna patterns, beam choice, "
+                  "DisableSchedulingIfNoDeviceConnected, SINR/scheduler). Use PCAP on UT/GW users or "
+                  "NS_LOG on SatPhy/SatMac to debug.");
+}
+
+/** Remove runtask-only flags so CommandLine does not treat them as unknown arguments. */
+std::vector<std::string>
+FilterArgvForCommandLine(int argc,
+                         char* argv[],
+                         std::string& simsDir,
+                         std::string& scenarioPath)
+{
+    simsDir = std::string(kHapDataRoot) + "/sims";
+    scenarioPath.clear();
+    std::vector<std::string> out;
+    if (argc > 0 && argv[0])
+    {
+        out.emplace_back(argv[0]);
+    }
+    for (int i = 1; i < argc; ++i)
+    {
+        if (!argv[i])
+        {
+            continue;
+        }
+        std::string a(argv[i]);
+        if (a.rfind("--simsDir=", 0) == 0)
+        {
+            simsDir = a.substr(10);
+            continue;
+        }
+        if (a.rfind("--scenarioPath=", 0) == 0)
+        {
+            scenarioPath = a.substr(15);
+            continue;
+        }
+        out.push_back(std::move(a));
+    }
+    return out;
+}
+
+} // namespace
+
+// ============================================================================
+// main
+// ============================================================================
+int
+main(int argc, char* argv[])
+{
+    Config::SetDefault("ns3::SatConf::ForwardLinkRegenerationMode",
+                       EnumValue(SatEnums::REGENERATION_NETWORK));
+    Config::SetDefault("ns3::SatConf::ReturnLinkRegenerationMode",
+                       EnumValue(SatEnums::REGENERATION_NETWORK));
     
-    # Цвета для событий
-    SND = '\033[32m'  # Green (Send)
-    RCV = '\033[34m'  # Blue (Receive)
-    DRP = '\033[31m'  # Red (Drop)
-    ENQ = '\033[33m'  # Yellow (Enqueue)
-    OTHER = '\033[37m' # White
+    Config::SetDefault("ns3::SatOrbiterFeederPhy::QueueSize", UintegerValue(100000));
+    Config::SetDefault("ns3::SatHelper::HandoversEnabled", BooleanValue(true));
+    Config::SetDefault("ns3::SatHandoverModule::NumberClosestSats", UintegerValue(3));
+    Config::SetDefault("ns3::SatGwMac::DisableSchedulingIfNoDeviceConnected", BooleanValue(true));
+    Config::SetDefault("ns3::SatOrbiterMac::DisableSchedulingIfNoDeviceConnected", BooleanValue(true));
+    Config::SetDefault("ns3::SatEnvVariables::EnableSimulationOutputOverwrite", BooleanValue(true));
+    Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(true));
 
-    # Цвета для направлений
-    FWD = '\033[36m'  # Cyan
-    RTN = '\033[35m'  # Magenta
+    float simulationDuration = 2.0; // seconds
+    std::string scenarioName = "constellation-leo-3-satellites-hap";
+    uint32_t packetSize = 512; // Packet size in bytes
+    float interval = 100.0; // Time interval between CBR packets in milliseconds
+    bool enablePcap = false;
+    bool enableHexDump = false;
 
-    # Общие цвета
-    RED = '\033[31m' 
-    GREEN = '\033[32m'
+    std::string simsDir;
+    std::string scenarioPath;
+    std::string scenarioLayoutRoot = std::string(kHapDataRoot) + "/scenarios/" + scenarioName;
+    std::vector<std::string> argvStorage = FilterArgvForCommandLine(argc, argv, simsDir, scenarioPath);
+    std::vector<char*> argvFiltered;
+    argvFiltered.reserve(argvStorage.size());
+    for (auto& s : argvStorage)
+    {
+        argvFiltered.push_back(s.data());
+    }
 
-def get_color_for_event(event):
-    if event == 'SND': return Colors.SND
-    if event == 'RCV': return Colors.RCV
-    if event == 'DRP': return Colors.DRP
-    if event == 'ENQ': return Colors.ENQ
-    return Colors.OTHER
+    if (scenarioPath.empty())
+    {
+        Config::SetDefault("ns3::SatEnvVariables::DataPath", StringValue(kHapDataRoot));
+    }
 
-def get_color_for_direction(direction):
-    if direction == 'FWD': return Colors.FWD
-    if direction == 'RTN': return Colors.RTN
-    return Colors.RESET
+    // Declare command line arguments
+    CommandLine cmd;
+    cmd.AddValue("packetSize", "Size of CBR packets in bytes", packetSize);
+    cmd.AddValue("interval", "Time interval between CBR packets, in milliseconds", interval);
+    cmd.AddValue("scenarioName", "Scenario name", scenarioName);
+    cmd.AddValue("simulationDuration", "Simulation duration, in seconds", simulationDuration);
+    cmd.AddValue("enablePcap", "Enable PCAP", enablePcap);
+    cmd.AddValue("enableHexDump", "Enable Hex-Dump", enableHexDump);
 
-def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    std::string simulationName = TEST_NAME;
+    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>(simulationName);
+    simulationHelper->AddDefaultUiArguments(cmd); // Adds default UI arguments (simulation time, etc.)
+    cmd.Parse(static_cast<int>(argvFiltered.size()), argvFiltered.data());
 
-def format_entry(entry, highlight=False):
-    """Форматирует одну запись лога в строку таблицы."""
-    time_str = f"{entry.time:.6f}"
+    {
+        std::vector<std::string> issues;
+        ValidateCliInputs(simulationDuration, interval, packetSize, simsDir, issues);
+        PrintIssuesAndAbort(issues);
+    }
+
+    if (!scenarioPath.empty())
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path absScenario = fs::canonical(scenarioPath, ec);
+        NS_ABORT_MSG_IF(ec || !fs::is_directory(absScenario),
+                        "--scenarioPath must be an existing directory (absolute or cwd-relative); "
+                        "got: "
+                            << scenarioPath);
+        const fs::path taskRoot = absScenario.parent_path();
+        const fs::path scenariosDir = taskRoot / "scenarios";
+        fs::create_directories(scenariosDir, ec);
+        NS_ABORT_MSG_IF(ec, "Cannot create directory: " << scenariosDir.string());
+        const fs::path linkPath = scenariosDir / scenarioName;
+        fs::remove_all(linkPath, ec);
+        ec.clear();
+        fs::create_directory_symlink(absScenario, linkPath, ec);
+        NS_ABORT_MSG_IF(ec,
+                        "Cannot symlink scenario directory " << absScenario.string() << " -> "
+                                                               << linkPath.string());
+        std::error_code ecRoot;
+        const std::string taskRootCanonical = fs::weakly_canonical(taskRoot, ecRoot).string();
+        NS_ABORT_MSG_IF(ecRoot, "Cannot canonicalize task root: " << taskRoot.string());
+        Config::SetDefault("ns3::SatEnvVariables::DataPath", StringValue(taskRootCanonical));
+        scenarioLayoutRoot = linkPath.string();
+    }
+
+    {
+        std::vector<std::string> issues;
+        ValidateScenarioLayout(scenarioLayoutRoot, issues);
+        PrintIssuesAndAbort(issues);
+    }
+
+    std::string fixedOutputDir = SystemPath::Append(simsDir, simulationName + "/");
+    SystemPath::MakeDirectories(fixedOutputDir);
+    simulationHelper->SetOutputPath(fixedOutputDir);
+    simulationHelper->SetSimulationTime(Seconds(simulationDuration));
+    uint32_t utUsers = 1;
+    simulationHelper->SetGwUserCount(utUsers);
+    simulationHelper->SetUserCountPerUt(utUsers);
+
+    std::set<uint32_t> beamSetAll = {1,  2,  3,
+                                     4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
+                                     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                                     31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+                                     46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+                                     61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72
+                                   };
+    simulationHelper->SetBeamSet(beamSetAll);
     
-    event_color = get_color_for_event(entry.event)
-    dir_color = get_color_for_direction(entry.direction)
+    // Scenario with 3 orbiters:
+    // - satId 0/1 use TLE
+    // - satId 2 uses traced mobility from positions/sat_traces.txt
+    //
+    // runtask passes --scenarioPath=.../task/scenario (flat unpack). SimulationHelper only exposes
+    // LoadScenario(name) which resolves LocateDataDirectory()/scenarios/<name>. When scenarioPath is
+    // set, we symlink .../task/scenarios/<scenarioName> -> .../task/scenario and set DataPath to
+    // .../task (works without LoadScenarioDirectory, which may be absent in some satellite builds).
+    simulationHelper->LoadScenario(scenarioName);
+
+    simulationHelper->CreateSatScenario(SatHelper::NONE);
+    std::string outputDir = Singleton<SatEnvVariables>::Get()->GetOutputPath();
+    SystemPath::MakeDirectories(outputDir);
+
+    NS_LOG_UNCOND("Output directory set to: " << outputDir);
+    PrintRuntimeHints();
+
+    Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
+    ValidateOrbiterTrajectories(scenarioName, topology);
+
+    // ========================================================================
+    // Unified device-to-IP mapping table for all roles
+    // ========================================================================
+    std::vector<std::tuple<uint32_t, std::string, uint32_t,
+                std::string, std::string>> ipRows;
+    CollectDeviceIpRows(topology->GetGwNodes(), "GW", ipRows);
+    CollectDeviceIpRows(topology->GetOrbiterNodes(), "SAT", ipRows);
+    CollectDeviceIpRows(topology->GetUtNodes(), "UT", ipRows);
+    PrintDeviceIpTable(ipRows);
+    SaveDeviceIpTableToFile(ipRows, SystemPath::Append(outputDir, "DevicesTable.txt"));
+
+    // ========================================================================
+    // PCAP for all nodes
+    // ========================================================================
+   
+    // PCAP for all nodes
+    if (enablePcap)
+    {
+    EnablePcapForNodeContainer(topology->GetGwNodes(),
+                              "sat-handover-gw", outputDir,
+                              "GW", enableHexDump);
+    EnablePcapForNodeContainer(topology->GetOrbiterNodes(),
+                               "sat-handover-orbiter", outputDir,
+                               "SAT", enableHexDump);
+    EnablePcapForNodeContainer(topology->GetUtNodes(),
+                               "sat-handover-ut", outputDir,
+                               "UT", enableHexDump);
+    }
+
+    // ========================================================================
+    // Traffic
+    // ========================================================================
+    simulationHelper->GetTrafficHelper()->AddCbrTraffic(
+        SatTrafficHelper::FWD_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
+        packetSize,
+        NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
+        Singleton<SatTopology>::Get()->GetUtUserNodes(),
+        Seconds(1.0), Seconds(simulationDuration), Seconds(0));
+
+    simulationHelper->GetTrafficHelper()->AddCbrTraffic(
+        SatTrafficHelper::RTN_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
+        packetSize,
+        NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
+        Singleton<SatTopology>::Get()->GetUtUserNodes(),
+        Seconds(1.0), Seconds(simulationDuration), Seconds(0));
+
+    Config::SetDefault("ns3::ConfigStore::Filename", 
+        StringValue(SystemPath::Append(outputDir, TEST_NAME"-attributes.xml")));
+    Config::SetDefault("ns3::ConfigStore::FileFormat", StringValue("Xml"));
+    Config::SetDefault("ns3::ConfigStore::Mode", StringValue("Save"));
+    ConfigStore outputConfig;
+    outputConfig.ConfigureDefaults();
+
     
-    # Если запись является результатом поиска, инвертируем цвета для подсветки
-    if highlight:
-        event_color = '\033[7m' # Invert background/foreground
-        dir_color = '\033[7m'
+    // Statistics
+    Ptr<SatStatsHelperContainer> s = simulationHelper->GetStatisticsContainer();
+    s->AddPerSatFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerSatFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerSatRtnAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerSatRtnUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerBeamFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerBeamFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerBeamBeamServiceTime(SatStatsHelper::OUTPUT_SCALAR_FILE);
 
-    # Формирование информации о MAC адресах (если есть)
-    mac_info = ""
-    if entry.src_mac and entry.dst_mac:
-        mac_info = f"{entry.src_mac} -> {entry.dst_mac}"
-    elif entry.src_mac:
-        mac_info = f"Src: {entry.src_mac}"
-    
-    # Форматирование строки с фиксированной шириной колонок для читаемости
-    line = (
-        f"{time_str:<10} "
-        f"{event_color}{entry.event:<3}{Colors.RESET} "
-        f"{entry.node_type:<3} "
-        f"{str(entry.node_id):<3} "
-        f"{entry.mac:<17} "
-        f"{entry.level:<3} "
-        f"{dir_color}{entry.direction:<3}{Colors.RESET} "
-        f"{str(entry.packet_id):<5} "
-        f"{mac_info}"
-    )
-    return line
+    // Packet loss and collision diagnostics
+    s->AddGlobalFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddGlobalRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederCrdsaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederCrdsaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederSlottedAlohaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederSlottedAlohaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddGlobalPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerIslPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
 
-def print_header():
-    """Выводит заголовок таблицы."""
-    header = (
-        f"{'Time':<10} "
-        f"{'Evt':<3} "
-        f"{'Typ':<3} "
-        f"{'ID':<3} "
-        f"{'MAC Address':<17} "
-        f"{'Lvl':<3} "
-        f"{'Dir':<3} "
-        f"{'Pkt':<5} "
-        f"{'Source -> Destination'}"
-    )
-    print(f"{Colors.BOLD}{header}{Colors.RESET}")
-    print("-" * 100)
+    simulationHelper->EnableProgressLogs();
 
-def run_display(log_filename, page_size=20):
-    """
-    Основной цикл отображения.
-    """
-    print(f"Loading trace: {log_filename}...")
-    entries = list(cli_logs_parser.read_trace_file(log_filename))
-    total_entries = len(entries)
-    
-    if total_entries == 0:
-        print("No valid trace entries found.")
-        return
+    NS_LOG_UNCOND("Configured simulator stop time (virtual): "
+                  << simulationHelper->GetSimTime().GetSeconds() << " s");
+    const auto simulationStart = std::chrono::steady_clock::now();
+    simulationHelper->RunSimulation();
+    const auto simulationEnd = std::chrono::steady_clock::now();
+    const auto simulationElapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(simulationEnd - simulationStart);
+    NS_LOG_UNCOND("Simulation wall-clock time (CPU, not virtual sim time): "
+                  << (simulationElapsed.count() / 1000.0) << " s");
 
-    # Создаем список времен для быстрого поиска (бинарный поиск)
-    entry_times = [e.time for e in entries]
-
-    print(f"Loaded {total_entries} entries.")
-
-    current_index = 0
-    
-    # Переменные для поиска (Search Mode)
-    search_indices = []
-    current_search_pos = -1
-    search_term = ""
-
-    # Переменные для фильтрации (Filter Mode)
-    # filter_mode может быть: None, 'packet', 'device'
-    filter_mode = None 
-    filter_description = ""
-    filtered_indices = []
-    # Сохраняем ID пакета или устройства для справки, если нужно
-    filtered_target_id = None 
-
-    while True:
-        clear_screen()
-        
-        # --- Логика определения текущего режима и границ ---
-        display_entries = []
-        display_start = 0
-        display_end = 0
-        
-        if filter_mode is not None:
-            # Режим фильтрации (пакет или устройство)
-            total_viewable = len(filtered_indices)
-            
-            # Защита от выхода за границы списка
-            if current_index >= total_viewable:
-                current_index = max(0, total_viewable - 1)
-            elif current_index < 0:
-                current_index = 0
-
-            display_start = current_index
-            display_end = min(current_index + page_size, total_viewable)
-            
-            # Получаем реальные индексы из общего списка
-            real_indices = filtered_indices[display_start:display_end]
-            display_entries = [entries[i] for i in real_indices]
-            
-            if filter_mode == 'packet':
-                status_suffix = f" | {Colors.BOLD}{Colors.RED}FILTERED ON PKT ID: {filtered_target_id}{Colors.RESET} ({total_viewable} events)"
-            else: # device
-                status_suffix = f" | {Colors.BOLD}{Colors.RED}FILTERED ON DEV: {filter_description}{Colors.RESET} ({total_viewable} events)"
-        else:
-            # Обычный режим
-            if current_index >= total_entries:
-                current_index = total_entries - 1
-            elif current_index < 0:
-                current_index = 0
-                
-            display_start = current_index
-            display_end = min(current_index + page_size, total_entries)
-            display_entries = entries[display_start:display_end]
-            total_viewable = total_entries
-            
-            status_suffix = ""
-            if search_indices:
-                status_suffix += f" | Search: '{search_term}' [{current_search_pos + 1}/{len(search_indices)}]"
-
-        # --- Вывод на экран ---
-        status_msg = f"CLI Packet Trace Viewer | Page {display_start // page_size + 1}/{(total_viewable - 1) // page_size + 1}"
-        status_msg += status_suffix
-        
-        print(f"{Colors.BOLD}{status_msg}{Colors.RESET}")
-        print_header()
-        
-        # Вывод строк
-        for i, entry in enumerate(display_entries):
-            is_match = False
-            # Подсветка поиска работает только если не в режиме фильтрации
-            if filter_mode is None and search_indices and current_search_pos >= 0 and current_search_pos < len(search_indices):
-                # real_idx - это индекс в основном массиве entries
-                real_idx = display_start + i
-                if real_idx == search_indices[current_search_pos]:
-                    is_match = True
-            
-            print(format_entry(entry, highlight=is_match))
-        
-        print(f"\nShowing entries {display_start + 1} - {display_end} of {total_viewable}")
-        
-        # --- Подсказка управления (разбита на 2 строки) ---
-        print(f"{Colors.BOLD}Controls:{Colors.RESET} [Enter] Next | [b] Back | [t <time>] Jump | [Q] Quit")
-        
-        if filter_mode is not None:
-            print(f"{Colors.BOLD}         {Colors.RESET} [c] Clear Filter")
-        else:
-            print(f"{Colors.BOLD}         {Colors.RESET} [s <mac>] Search MAC | [p <id>] Search Pkt | [f <id>] Filter Pkt |")
-            print(f"{Colors.BOLD}         {Colors.RESET} [d <type><id>] Filter Dev | [n/N] Next/Prev")
-
-        # --- Обработка ввода ---
-        try:
-            user_input = input("> ").strip()
-            
-            if user_input.lower() == 'q':
-                break
-            
-            # --- Команды, работающие в обоих режимах ---
-            elif not user_input:
-                current_index += page_size
-            elif user_input.lower() == 'b':
-                current_index = max(0, current_index - page_size)
-            
-            # --- Команды режима Фильтрации ---
-            elif user_input.lower() == 'c':
-                if filter_mode is not None:
-                    # Возвращаемся к полному логу, пытаясь сохранить позицию по времени
-                    try:
-                        current_real_idx = filtered_indices[current_index]
-                        current_time = entries[current_real_idx].time
-                        filter_mode = None
-                        filtered_indices = []
-                        idx = bisect.bisect_left(entry_times, current_time)
-                        current_index = idx
-                    except:
-                        filter_mode = None
-                        filtered_indices = []
-                        current_index = 0
-                else:
-                    print("Not in filter mode.")
-                    input()
-            
-            # --- Команды только для Обычного режима ---
-            elif filter_mode is None:
-                # Поиск по MAC
-                if user_input.lower().startswith('s '):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) > 1:
-                        search_term = f"MAC: {parts[1]}"
-                        term_lower = parts[1].lower()
-                        search_indices = [
-                            i for i, e in enumerate(entries) 
-                            if term_lower in e.mac.lower() or 
-                               (e.src_mac and term_lower in e.src_mac.lower()) or 
-                               (e.dst_mac and term_lower in e.dst_mac.lower())
-                        ]
-                        current_search_pos = -1
-                        if search_indices:
-                            current_search_pos = 0
-                            current_index = search_indices[0]
-                        else:
-                            print(f"No matches found for MAC '{parts[1]}'. Press Enter...")
-                            input() 
-                    else:
-                        print("Usage: s <mac_address>")
-                        input()
-
-                # Фильтрация по ID пакета
-                elif user_input.lower().startswith('f '):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) > 1:
-                        try:
-                            target_pid = int(parts[1])
-                            filtered_target_id = target_pid
-                            filtered_indices = [
-                                i for i, e in enumerate(entries) 
-                                if e.packet_id == target_pid
-                            ]
-                            if filtered_indices:
-                                filter_mode = 'packet'
-                                current_index = 0
-                                # Сбрасываем поиск
-                                search_indices = []
-                                search_term = ""
-                            else:
-                                print(f"No events found for Packet ID '{target_pid}'. Press Enter...")
-                                input()
-                        except ValueError:
-                            print("Invalid Packet ID. Use integer (e.g., 42)")
-                            input()
-                    else:
-                        print("Usage: f <packet_id>")
-                        input()
-
-                # Поиск по ID пакета (без фильтрации)
-                elif user_input.lower().startswith('p '):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) > 1:
-                        try:
-                            target_pid = int(parts[1])
-                            search_term = f"Packet ID: {target_pid}"
-                            search_indices = [
-                                i for i, e in enumerate(entries) 
-                                if e.packet_id == target_pid
-                            ]
-                            current_search_pos = -1
-                            if search_indices:
-                                current_search_pos = 0
-                                current_index = search_indices[0]
-                            else:
-                                print(f"No matches found for Packet ID '{target_pid}'. Press Enter...")
-                                input()
-                        except ValueError:
-                            print("Invalid Packet ID. Use integer (e.g., 42)")
-                            input()
-                    else:
-                        print("Usage: p <packet_id>")
-                        input()
-
-                # Фильтрация по Устройству (НОВОЕ)
-                elif user_input.lower().startswith('d '):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) > 1:
-                        # Парсинг строки вида "SAT1", "UT10", "GW0"
-                        match = re.match(r'^([A-Z]+)(\d+)$', parts[1])
-                        if match:
-                            target_type = match.group(1)
-                            target_id = int(match.group(2))
-                            filter_description = f"{target_type}{target_id}"
-                            
-                            filtered_indices = [
-                                i for i, e in enumerate(entries) 
-                                if e.node_type == target_type and e.node_id == target_id
-                            ]
-                            if filtered_indices:
-                                filter_mode = 'device'
-                                filtered_target_id = target_id # храним для справки
-                                current_index = 0
-                                search_indices = []
-                                search_term = ""
-                            else:
-                                print(f"No events found for Device '{filter_description}'. Press Enter...")
-                                input()
-                        else:
-                            print("Invalid format. Use 'd SAT1' or 'd UT4'. Press Enter...")
-                            input()
-                    else:
-                        print("Usage: d <type><id> (e.g., d SAT1)")
-                        input()
-
-                # Навигация по результатам поиска
-                elif user_input.lower() == 'n':
-                    if search_indices:
-                        if current_search_pos + 1 < len(search_indices):
-                            current_search_pos += 1
-                            current_index = search_indices[current_search_pos]
-                        else:
-                            print("End of search results.")
-                            input()
-                    else:
-                        print("No active search. Use 's <mac>' or 'p <id>' first.")
-                        input()
-                
-                elif user_input == 'N':
-                    if search_indices:
-                        if current_search_pos > 0:
-                            current_search_pos -= 1
-                            current_index = search_indices[current_search_pos]
-                        else:
-                            print("Start of search results.")
-                            input()
-                    else:
-                        print("No active search. Use 's <mac>' or 'p <id>' first.")
-                        input()
-
-                # Переход по времени
-                elif user_input.lower().startswith('t '):
-                    parts = user_input.split(maxsplit=1)
-                    if len(parts) > 1:
-                        try:
-                            target_time = float(parts[1])
-                            idx = bisect.bisect_left(entry_times, target_time)
-                            if idx < total_entries:
-                                current_index = idx
-                            else:
-                                current_index = total_entries - 1
-                        except ValueError:
-                            print("Invalid time format. Use float (e.g., 1.5)")
-                            input()
-                    else:
-                        print("Usage: t <time>")
-                        input()
-            
-            else:
-                print("Command not available in Filter Mode. Press [c] to exit filter first.")
-                input()
-
-        except (EOFError, KeyboardInterrupt):
-            break
-
-    print(f"\n{Colors.BOLD}End of trace.{Colors.RESET}")
-
-def main():
-    parser = argparse.ArgumentParser(description='Display Satellite Packet Trace')
-    parser.add_argument('log_file', type=str, help='Path to PacketTrace.log file')
-    parser.add_argument('--page-size', type=int, default=20, help='Number of lines per page')
-    
-    args = parser.parse_args()
-    
-    if not os.path.exists(args.log_file):
-        print(f"Error: File '{args.log_file}' not found.")
-        sys.exit(1)
-
-    run_display(args.log_file, args.page_size)
-
-if __name__ == '__main__':
-    main()
+    return 0;
+}
 ```
 
