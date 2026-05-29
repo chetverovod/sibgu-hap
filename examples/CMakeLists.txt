@@ -140,3 +140,20 @@ build_lib_example(
                        ${libtraffic}
 )
 
+
+build_lib_example(
+    NAME lte-bs-handover-bf-hap
+    SOURCE_FILES lte-bs-handover-bf-hap.cc
+    LIBRARIES_TO_LINK  ${libsibgu-hap}
+                       ${libapplications}
+                       ${libconfig-store}
+                       ${libinternet}
+                       ${libnetwork}
+                       ${libsatellite}
+                       ${libtraffic}
+                       ${liblte-module}
+                       ${liblte}
+                       ${libantenna}
+
+)
+
