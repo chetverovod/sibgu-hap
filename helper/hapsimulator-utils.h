@@ -68,8 +68,13 @@ ValidateScenarioLayout(const std::string& scenarioRoot, std::vector<std::string>
     AddIssueIf(!fileOk("/beams/fwdConf.txt"), "Missing: " + scenarioRoot + "/beams/fwdConf.txt", issues);
     AddIssueIf(!fileOk("/beams/rtnConf.txt"), "Missing: " + scenarioRoot + "/beams/rtnConf.txt", issues);
     AddIssueIf(!dirOk("/waveforms"), "Missing directory: " + scenarioRoot + "/waveforms", issues);
-    AddIssueIf(!fileOk("/positions/ut_positions.txt"),
-               "Missing: " + scenarioRoot + "/positions/ut_positions.txt", issues);
+    const bool hasCellular =
+        fileOk("/cellular/enb.conf") || fileOk("/cellular/enb_positions.txt");
+    if (!hasCellular)
+    {
+        AddIssueIf(!fileOk("/positions/ut_positions.txt"),
+                   "Missing: " + scenarioRoot + "/positions/ut_positions.txt", issues);
+    }
     AddIssueIf(!fileOk("/positions/gw_positions.txt"),
                "Missing: " + scenarioRoot + "/positions/gw_positions.txt", issues);
 

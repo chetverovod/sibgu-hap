@@ -138,6 +138,9 @@ build_lib_example(
                        ${libnetwork}
                        ${libsatellite}
                        ${libtraffic}
+                       ${liblte}
+                       ${libpoint-to-point}
+                       ${libmobility}
 )
 
 

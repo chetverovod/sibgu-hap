@@ -35,6 +35,7 @@
 #include "../stats/device-ip-table.h"
 #include "../model/orbiter-trajectory-validation.h"
 #include "../stats/pcap-node-tracing.h"
+#include "../helper/lte-cellular-helper.h"
 #include <chrono>
 #include <filesystem>
 #include <sstream>
@@ -105,9 +106,13 @@ ValidateScenarioLayout(const std::string& scenarioRoot, std::vector<std::string>
     AddIssueIf(!fileOk("/beams/fwdConf.txt"), "Missing: " + scenarioRoot + "/beams/fwdConf.txt", issues);
     AddIssueIf(!fileOk("/beams/rtnConf.txt"), "Missing: " + scenarioRoot + "/beams/rtnConf.txt", issues);
     AddIssueIf(!dirOk("/waveforms"), "Missing directory: " + scenarioRoot + "/waveforms", issues);
-    AddIssueIf(!fileOk("/positions/ut_positions.txt"),
-               "Missing: " + scenarioRoot + "/positions/ut_positions.txt",
-               issues);
+    const bool hasCellular =
+        fileOk("/cellular/enb.conf") || fileOk("/cellular/enb_positions.txt");
+    if (!hasCellular)
+    {
+        AddIssueIf(!fileOk("/positions/ut_positions.txt"),
+                   "Missing: " + scenarioRoot + "/positions/ut_positions.txt", issues);
+    }
     AddIssueIf(!fileOk("/positions/gw_positions.txt"),
                "Missing: " + scenarioRoot + "/positions/gw_positions.txt",
                issues);
@@ -238,6 +243,7 @@ main(int argc, char* argv[])
     float trafficStep = 1.0; 
     bool enablePcap = false;
     bool enableHexDump = false;
+    bool enableLte = false;
 
     CommandLine cmd;
     cmd.AddValue("packetSize", "Size of CBR packets in bytes", packetSize);
@@ -247,6 +253,7 @@ main(int argc, char* argv[])
     cmd.AddValue("simulationDuration", "Simulation duration, in seconds", simulationDuration);
     cmd.AddValue("enablePcap", "Enable PCAP", enablePcap);
     cmd.AddValue("enableHexDump", "Enable Hex-Dump", enableHexDump);
+    cmd.AddValue("enableLte", "Enable LENA LTE eNB/UE from scenario/cellular/", enableLte);
     simulationHelper->AddDefaultUiArguments(cmd); 
     cmd.Parse(static_cast<int>(argvFiltered.size()), argvFiltered.data());
 
@@ -300,6 +307,12 @@ main(int argc, char* argv[])
         PrintIssuesAndAbort(issues);
     }
 
+    if (enableLte || LteCellularHelper::HasCellularScenario(scenarioLayoutRoot))
+    {
+        enableLte = true;
+        LteCellularHelper::EnsureUtPositionsFile(scenarioLayoutRoot);
+    }
+
     std::string fixedOutputDir = SystemPath::Append(simsDir, simulationName + "/");
     SystemPath::MakeDirectories(fixedOutputDir);
     simulationHelper->SetOutputPath(fixedOutputDir);
@@ -329,6 +342,15 @@ main(int argc, char* argv[])
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
     ValidateOrbiterTrajectories(scenarioName, topology);
 
+    LteCellularHelper lteCellular;
+    if (enableLte)
+    {
+        lteCellular.Install(scenarioLayoutRoot,
+                            topology,
+                            Seconds(simulationDuration),
+                            outputDir);
+    }
+
     // ========================================================================
     // Unified device-to-IP mapping table for all roles
     // ========================================================================
@@ -337,6 +359,11 @@ main(int argc, char* argv[])
     CollectDeviceIpRows(topology->GetGwNodes(), "GW", ipRows);
     CollectDeviceIpRows(topology->GetOrbiterNodes(), "SAT", ipRows);
     CollectDeviceIpRows(topology->GetUtNodes(), "UT", ipRows);
+    if (enableLte)
+    {
+        CollectDeviceIpRows(lteCellular.GetEnbNodes(), "ENB", ipRows);
+        CollectDeviceIpRows(lteCellular.GetUeNodes(), "UE", ipRows);
+    }
     PrintDeviceIpTable(ipRows);
     SaveDeviceIpTableToFile(ipRows, SystemPath::Append(outputDir, "DevicesTable.txt"));
 
@@ -355,24 +382,37 @@ main(int argc, char* argv[])
         EnablePcapForNodeContainer(topology->GetUtNodes(),
                                    "sat-handover-ut", outputDir,
                                    "UT", enableHexDump);
+        if (enableLte)
+        {
+            EnablePcapForNodeContainer(lteCellular.GetUeNodes(),
+                                       "lte-ue", outputDir,
+                                       "UE", enableHexDump);
+        }
     }
 
     // ========================================================================
     // Traffic
     // ========================================================================
-    simulationHelper->GetTrafficHelper()->AddCbrTraffic(
-        SatTrafficHelper::FWD_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
-        packetSize,
-        NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
-        Singleton<SatTopology>::Get()->GetUtUserNodes(),
-        Seconds(1.0), Seconds(simulationDuration), Seconds(0));
+    if (Singleton<SatTopology>::Get()->GetUtUserNodes().GetN() > 0)
+    {
+        simulationHelper->GetTrafficHelper()->AddCbrTraffic(
+            SatTrafficHelper::FWD_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
+            packetSize,
+            NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
+            Singleton<SatTopology>::Get()->GetUtUserNodes(),
+            Seconds(1.0), Seconds(simulationDuration), Seconds(0));
 
-    simulationHelper->GetTrafficHelper()->AddCbrTraffic(
-        SatTrafficHelper::RTN_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
-        packetSize,
-        NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
-        Singleton<SatTopology>::Get()->GetUtUserNodes(),
-        Seconds(1.0), Seconds(simulationDuration), Seconds(0));
+        simulationHelper->GetTrafficHelper()->AddCbrTraffic(
+            SatTrafficHelper::RTN_LINK, SatTrafficHelper::UDP, MilliSeconds(interval),
+            packetSize,
+            NodeContainer(Singleton<SatTopology>::Get()->GetGwUserNode(0)),
+            Singleton<SatTopology>::Get()->GetUtUserNodes(),
+            Seconds(1.0), Seconds(simulationDuration), Seconds(0));
+    }
+    else
+    {
+        NS_LOG_UNCOND("[hapsimulator] No SNS3 UT users; satellite CBR skipped (LTE UE traffic is separate).");
+    }
 
     Config::SetDefault("ns3::ConfigStore::Filename", 
         StringValue(SystemPath::Append(outputDir, TEST_NAME"-attributes.xml")));

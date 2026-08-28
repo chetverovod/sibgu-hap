@@ -10,10 +10,12 @@
 #include "ns3/system-path.h"
 
 #include <filesystem> // Для std::filesystem::remove_all
+#include <fstream>
 #include <string>
 
 // Подключаем наши вынесенные утилиты (путь может отличаться в зависимости от вашей структуры)
 #include "../helper/hapsimulator-utils.h"
+#include "../helper/lte-cellular-helper.h"
 
 using namespace ns3;
 
@@ -82,6 +84,105 @@ private:
         // Тест 3: Граничные условия (нулевые значения)
         HapSimulatorUtils::ValidateCliInputs(0.0, 100.0, 1024, "/dir", issues);
         NS_TEST_ASSERT_MSG_EQ (issues.size(), 1, "Zero duration should trigger 1 issue");
+    }
+};
+
+class LteCellularParseTestCase : public TestCase
+{
+public:
+    LteCellularParseTestCase()
+        : TestCase("Parse scenario/cellular/ LTE eNB and UE files")
+    {
+    }
+
+private:
+    virtual void DoRun() override
+    {
+        NS_TEST_ASSERT_MSG_EQ(LteCellularHelper::MhzToResourceBlocks(20.0),
+                              100,
+                              "20 MHz -> 100 RB");
+        NS_TEST_ASSERT_MSG_EQ(LteCellularHelper::MhzToResourceBlocks(10.0),
+                              50,
+                              "10 MHz -> 50 RB");
+        NS_TEST_ASSERT_MSG_EQ(LteCellularHelper::UlEarfcnFromDl(100),
+                              18100,
+                              "Band-1 UL EARFCN");
+
+        const std::string root = SystemPath::MakeTemporaryDirectoryName();
+        std::filesystem::create_directories(root + "/cellular");
+        std::filesystem::create_directories(root + "/positions");
+
+        {
+            std::ofstream conf(root + "/cellular/enb.conf");
+            conf << "% enb_id cell_id earfcn bandwidth_mhz tx_power_dbm mount carrier_id\n";
+            conf << "0 1 100 20 46 ground -\n";
+            std::ofstream pos(root + "/cellular/enb_positions.txt");
+            pos << "55.4 37.9 30\n";
+            std::ofstream uepos(root + "/cellular/ue_positions.txt");
+            uepos << "55.41 37.91 1.5\n";
+            std::ofstream ueconf(root + "/cellular/ue.conf");
+            ueconf << "% ue_id served_enb_id\n";
+            ueconf << "0 0\n";
+        }
+
+        NS_TEST_ASSERT_MSG_EQ(LteCellularHelper::HasCellularScenario(root),
+                              true,
+                              "cellular scenario detected");
+
+        auto enbs = LteCellularHelper::LoadEnbs(root);
+        NS_TEST_ASSERT_MSG_EQ(enbs.size(), 1, "one eNB");
+        NS_TEST_ASSERT_MSG_EQ(enbs[0].mount, "ground", "ground mount");
+        NS_TEST_ASSERT_MSG_EQ(enbs[0].lat, 55.4, "eNB lat");
+        NS_TEST_ASSERT_MSG_EQ(enbs[0].txPowerDbm, 46.0, "eNB tx power");
+
+        auto ues = LteCellularHelper::LoadUes(root);
+        NS_TEST_ASSERT_MSG_EQ(ues.size(), 1, "one UE");
+        NS_TEST_ASSERT_MSG_EQ(ues[0].servedEnbId, 0, "UE served_by eNB 0");
+
+        LteCellularHelper::EnsureUtPositionsFile(root);
+        NS_TEST_ASSERT_MSG_EQ(std::filesystem::exists(root + "/positions/ut_positions.txt"),
+                              true,
+                              "dummy ut_positions created");
+
+        std::filesystem::remove_all(root);
+    }
+};
+
+class LteAirborneTraceMatchTestCase : public TestCase
+{
+public:
+    LteAirborneTraceMatchTestCase()
+        : TestCase("Airborne eNB reuses carrier HAP trace mapping")
+    {
+    }
+
+private:
+    virtual void DoRun() override
+    {
+        const std::string root = SystemPath::MakeTemporaryDirectoryName();
+        std::filesystem::create_directories(root + "/cellular");
+        std::filesystem::create_directories(root + "/positions");
+
+        {
+            std::ofstream conf(root + "/cellular/enb.conf");
+            conf << "0 1 100 20 30 airborne HAPS-2\n";
+            std::ofstream pos(root + "/cellular/enb_positions.txt");
+            pos << "54.0 37.0 19000\n";
+            std::ofstream traces(root + "/cellular/enb_traces.txt");
+            traces << "0 positions/HAPS-2_trace.txt\n";
+            std::ofstream satTraces(root + "/positions/sat_traces.txt");
+            satTraces << "1 positions/HAPS-2_trace.txt\n";
+        }
+
+        auto enbs = LteCellularHelper::LoadEnbs(root);
+        NS_TEST_ASSERT_MSG_EQ(enbs.size(), 1, "one airborne eNB");
+        NS_TEST_ASSERT_MSG_EQ(enbs[0].mount, "airborne", "airborne mount");
+        NS_TEST_ASSERT_MSG_EQ(enbs[0].carrierId, "HAPS-2", "carrier id");
+        NS_TEST_ASSERT_MSG_EQ(enbs[0].traceRelPath,
+                              "positions/HAPS-2_trace.txt",
+                              "shared HAP trace");
+
+        std::filesystem::remove_all(root);
     }
 };
 
@@ -174,6 +275,8 @@ public:
         // Используем TestCase::Duration::QUICK вместо устаревшего TestCase::QUICK
         AddTestCase (new FilterArgvTestCase, TestCase::Duration::QUICK);
         AddTestCase (new ValidateCliInputsTestCase, TestCase::Duration::QUICK);
+        AddTestCase (new LteCellularParseTestCase, TestCase::Duration::QUICK);
+        AddTestCase (new LteAirborneTraceMatchTestCase, TestCase::Duration::QUICK);
         
         // Используем TestCase::Duration::EXTENSIVE для интеграционного теста
         AddTestCase (new TopologyCreationSmokeTestCase, TestCase::Duration::EXTENSIVE);
