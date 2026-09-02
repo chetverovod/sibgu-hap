@@ -16,12 +16,14 @@ build_lib(
                  model/orbiter-trajectory-validation.cc
                  helper/sibgu-hap-helper.cc
                  helper/lte-cellular-helper.cc
+                 helper/handover-guard.cc
                  stats/device-ip-table.cc
                  stats/pcap-node-tracing.cc
     HEADER_FILES model/sibgu-hap.h
                  model/orbiter-trajectory-validation.h
                  helper/sibgu-hap-helper.h
                  helper/lte-cellular-helper.h
+                 helper/handover-guard.h
                  helper/hapsimulator-utils.h
                  stats/device-ip-table.h
                  stats/pcap-node-tracing.h

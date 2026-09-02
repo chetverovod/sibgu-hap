@@ -36,6 +36,7 @@
 #include "../model/orbiter-trajectory-validation.h"
 #include "../stats/pcap-node-tracing.h"
 #include "../helper/lte-cellular-helper.h"
+#include "../helper/handover-guard.h"
 #include <chrono>
 #include <filesystem>
 #include <sstream>
@@ -341,6 +342,11 @@ main(int argc, char* argv[])
 
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
     ValidateOrbiterTrajectories(scenarioName, topology);
+
+    Ptr<HandoverGuard> handoverGuard = CreateObject<HandoverGuard>();
+    handoverGuard->Install(topology,
+                           simulationHelper->GetSatelliteHelper()->GetAntennaGainPatterns());
+    // Ptr must outlive RunSimulation(): scheduled polls use a raw this pointer.
 
     LteCellularHelper lteCellular;
     if (enableLte)

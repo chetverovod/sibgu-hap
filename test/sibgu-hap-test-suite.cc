@@ -15,6 +15,7 @@
 
 // Подключаем наши вынесенные утилиты (путь может отличаться в зависимости от вашей структуры)
 #include "../helper/hapsimulator-utils.h"
+#include "../helper/handover-guard.h"
 #include "../helper/lte-cellular-helper.h"
 
 using namespace ns3;
@@ -264,6 +265,27 @@ private:
 
 /**
  * \ingroup satellite
+ * \brief HandoverGuard constructs and no-ops on empty topology
+ */
+class HandoverGuardConstructTestCase : public TestCase
+{
+public:
+    HandoverGuardConstructTestCase()
+        : TestCase("Test HandoverGuard construct and empty Install")
+    {
+    }
+
+private:
+    void DoRun() override
+    {
+        Ptr<HandoverGuard> guard = CreateObject<HandoverGuard>();
+        NS_TEST_ASSERT_MSG_NE(guard, nullptr, "HandoverGuard should construct");
+        guard->Install(nullptr, nullptr);
+    }
+};
+
+/**
+ * \ingroup satellite
  * \brief Тестовый сьют, объединяющий все тесты hapsimulator (с учетом синтаксиса ns-3.43)
  */
 class HapSimulatorTestSuite : public TestSuite
@@ -277,6 +299,7 @@ public:
         AddTestCase (new ValidateCliInputsTestCase, TestCase::Duration::QUICK);
         AddTestCase (new LteCellularParseTestCase, TestCase::Duration::QUICK);
         AddTestCase (new LteAirborneTraceMatchTestCase, TestCase::Duration::QUICK);
+        AddTestCase (new HandoverGuardConstructTestCase, TestCase::Duration::QUICK);
         
         // Используем TestCase::Duration::EXTENSIVE для интеграционного теста
         AddTestCase (new TopologyCreationSmokeTestCase, TestCase::Duration::EXTENSIVE);
