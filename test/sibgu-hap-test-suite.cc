@@ -17,6 +17,7 @@
 #include "../helper/hapsimulator-utils.h"
 #include "../helper/handover-guard.h"
 #include "../helper/lte-cellular-helper.h"
+#include "ns3/geo-coordinate.h"
 
 using namespace ns3;
 
@@ -173,6 +174,12 @@ private:
             traces << "0 positions/HAPS-2_trace.txt\n";
             std::ofstream satTraces(root + "/positions/sat_traces.txt");
             satTraces << "1 positions/HAPS-2_trace.txt\n";
+            std::ofstream uepos(root + "/cellular/ue_positions.txt");
+            uepos << "54.0 37.0 19000\n";
+            std::ofstream ueconf(root + "/cellular/ue.conf");
+            ueconf << "0 0 airborne HAPS-2\n";
+            std::ofstream ueTraces(root + "/cellular/ue_traces.txt");
+            ueTraces << "0 positions/HAPS-2_trace.txt\n";
         }
 
         auto enbs = LteCellularHelper::LoadEnbs(root);
@@ -183,7 +190,58 @@ private:
                               "positions/HAPS-2_trace.txt",
                               "shared HAP trace");
 
+        auto ues = LteCellularHelper::LoadUes(root);
+        NS_TEST_ASSERT_MSG_EQ(ues.size(), 1, "one airborne UE");
+        NS_TEST_ASSERT_MSG_EQ(ues[0].mount, "airborne", "UE airborne mount");
+        NS_TEST_ASSERT_MSG_EQ(ues[0].carrierId, "HAPS-2", "UE carrier id");
+        NS_TEST_ASSERT_MSG_EQ(ues[0].traceRelPath,
+                              "positions/HAPS-2_trace.txt",
+                              "UE reuses HAP trace");
+
+        GeoCoordinate geo(enbs[0].lat, enbs[0].lon, 19000.0);
+        NS_TEST_ASSERT_MSG_GT(geo.ToVector().GetLength(),
+                              6.0e6,
+                              "HAPS ECEF must be Earth-radius scale, not the origin");
+
         std::filesystem::remove_all(root);
+    }
+};
+
+class LteLenaTraceOutputTestCase : public TestCase
+{
+public:
+    LteLenaTraceOutputTestCase()
+        : TestCase("LENA KPI filenames are pointed at sims outputDir")
+    {
+    }
+
+private:
+    static std::string InitialString(const std::string& tidName, const std::string& attr)
+    {
+        TypeId tid = TypeId::LookupByName(tidName);
+        TypeId::AttributeInformation info;
+        if (!tid.LookupAttributeByName(attr, &info) || !info.initialValue)
+        {
+            return {};
+        }
+        const auto* value = dynamic_cast<const StringValue*>(PeekPointer(info.initialValue));
+        return value ? value->Get() : std::string();
+    }
+
+    virtual void DoRun() override
+    {
+        LteCellularHelper::ConfigureLenaTraceOutput("/tmp/lena_kpi_out/");
+        NS_TEST_ASSERT_MSG_EQ(InitialString("ns3::PhyStatsCalculator", "DlRsrpSinrFilename"),
+                              "/tmp/lena_kpi_out/DlRsrpSinrStats.txt",
+                              "RSRP file directed to outputDir");
+        NS_TEST_ASSERT_MSG_EQ(InitialString("ns3::MacStatsCalculator", "DlOutputFilename"),
+                              "/tmp/lena_kpi_out/DlMacStats.txt",
+                              "MAC file directed to outputDir");
+        NS_TEST_ASSERT_MSG_EQ(
+            InitialString("ns3::RadioBearerStatsCalculator", "DlPdcpOutputFilename"),
+            "/tmp/lena_kpi_out/DlPdcpStats.txt",
+            "PDCP file directed to outputDir");
+        Config::Reset();
     }
 };
 
@@ -299,6 +357,7 @@ public:
         AddTestCase (new ValidateCliInputsTestCase, TestCase::Duration::QUICK);
         AddTestCase (new LteCellularParseTestCase, TestCase::Duration::QUICK);
         AddTestCase (new LteAirborneTraceMatchTestCase, TestCase::Duration::QUICK);
+        AddTestCase (new LteLenaTraceOutputTestCase, TestCase::Duration::QUICK);
         AddTestCase (new HandoverGuardConstructTestCase, TestCase::Duration::QUICK);
         
         // Используем TestCase::Duration::EXTENSIVE для интеграционного теста
