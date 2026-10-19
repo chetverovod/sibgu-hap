@@ -225,16 +225,8 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::SatEnvVariables::EnableSimulationOutputOverwrite", BooleanValue(true));
     Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(true));
 
-    float simulationDuration = 2.0; // seconds
-    std::string scenarioName = "constellation-leo-3-satellites-hap";
-    uint32_t packetSize = 512; // Packet size in bytes
-    float interval = 100.0; // Time interval between CBR packets in milliseconds
-    bool enablePcap = false;
-    bool enableHexDump = false;
-
     std::string simsDir;
     std::string scenarioPath;
-    std::string scenarioLayoutRoot = std::string(kHapDataRoot) + "/scenarios/" + scenarioName;
     std::vector<std::string> argvStorage = FilterArgvForCommandLine(argc, argv, simsDir, scenarioPath);
     std::vector<char*> argvFiltered;
     argvFiltered.reserve(argvStorage.size());
@@ -243,23 +235,26 @@ main(int argc, char* argv[])
         argvFiltered.push_back(s.data());
     }
 
-    if (scenarioPath.empty())
-    {
-        Config::SetDefault("ns3::SatEnvVariables::DataPath", StringValue(kHapDataRoot));
-    }
+    std::string simulationName = TEST_NAME;
+    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>(simulationName);
 
-    // Declare command line arguments
+    float simulationDuration = 2.0; 
+    std::string scenarioName = "constellation-leo-3-satellites-hap";
+    uint32_t packetSize = 512; 
+    float interval = 100.0; 
+    float trafficStep = 1.0; 
+    bool enablePcap = false;
+    bool enableHexDump = false;
+
     CommandLine cmd;
     cmd.AddValue("packetSize", "Size of CBR packets in bytes", packetSize);
     cmd.AddValue("interval", "Time interval between CBR packets, in milliseconds", interval);
+    cmd.AddValue("trafficStep", "Time interval of traffic change, in seconds", trafficStep);
     cmd.AddValue("scenarioName", "Scenario name", scenarioName);
     cmd.AddValue("simulationDuration", "Simulation duration, in seconds", simulationDuration);
     cmd.AddValue("enablePcap", "Enable PCAP", enablePcap);
     cmd.AddValue("enableHexDump", "Enable Hex-Dump", enableHexDump);
-
-    std::string simulationName = TEST_NAME;
-    Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>(simulationName);
-    simulationHelper->AddDefaultUiArguments(cmd); // Adds default UI arguments (simulation time, etc.)
+    simulationHelper->AddDefaultUiArguments(cmd); 
     cmd.Parse(static_cast<int>(argvFiltered.size()), argvFiltered.data());
 
     {
@@ -268,31 +263,42 @@ main(int argc, char* argv[])
         PrintIssuesAndAbort(issues);
     }
 
+    // ========================================================================
+    // ОБХОД ОГРАНИЧЕНИЯ SATELLITE MODULE: "Грубая сила" по созданию симлинка
+    // SatEnvVariables кэширует путь и игнорирует Config::Set. Поэтому мы создаем
+    // симлинк прямо там, где модуль жестко ожидает увидеть сценарий.
+    // ========================================================================
+    std::string scenarioLayoutRoot;
+    
+    // Получаем жестко зашитый путь, который использует SatHelper
+    std::string ns3InternalDataPath = Singleton<SatEnvVariables>::Get()->LocateDataDirectory();
+    std::string ns3ScenariosDir = ns3InternalDataPath + "/scenarios";
+    
     if (!scenarioPath.empty())
     {
         namespace fs = std::filesystem;
         std::error_code ec;
         const fs::path absScenario = fs::canonical(scenarioPath, ec);
         NS_ABORT_MSG_IF(ec || !fs::is_directory(absScenario),
-                        "--scenarioPath must be an existing directory (absolute or cwd-relative); "
-                        "got: "
-                            << scenarioPath);
-        const fs::path taskRoot = absScenario.parent_path();
-        const fs::path scenariosDir = taskRoot / "scenarios";
-        fs::create_directories(scenariosDir, ec);
-        NS_ABORT_MSG_IF(ec, "Cannot create directory: " << scenariosDir.string());
-        const fs::path linkPath = scenariosDir / scenarioName;
-        fs::remove_all(linkPath, ec);
+                        "--scenarioPath must be an existing directory; got: " << scenarioPath);
+
+        // Гарантируем существование папки scenarios внутри contrib/satellite/data/
+        fs::create_directories(ns3ScenariosDir, ec);
+        NS_ABORT_MSG_IF(ec, "Cannot create directory: " << ns3ScenariosDir);
+        
+        // Создаем симлинк: contrib/satellite/data/scenarios/<scenarioName> -> /tmp/.../scenario
+        const fs::path linkPath = ns3ScenariosDir + "/" + scenarioName;
+        
+        fs::remove_all(linkPath, ec); // Удаляем старый симлинк от предыдущих запусков
         ec.clear();
         fs::create_directory_symlink(absScenario, linkPath, ec);
-        NS_ABORT_MSG_IF(ec,
-                        "Cannot symlink scenario directory " << absScenario.string() << " -> "
-                                                               << linkPath.string());
-        std::error_code ecRoot;
-        const std::string taskRootCanonical = fs::weakly_canonical(taskRoot, ecRoot).string();
-        NS_ABORT_MSG_IF(ecRoot, "Cannot canonicalize task root: " << taskRoot.string());
-        Config::SetDefault("ns3::SatEnvVariables::DataPath", StringValue(taskRootCanonical));
+        NS_ABORT_MSG_IF(ec, "Cannot symlink " << absScenario.string() << " -> " << linkPath.string());
+        
         scenarioLayoutRoot = linkPath.string();
+    }
+    else
+    {
+        scenarioLayoutRoot = ns3ScenariosDir + "/" + scenarioName;
     }
 
     {
@@ -318,14 +324,6 @@ main(int argc, char* argv[])
                                    };
     simulationHelper->SetBeamSet(beamSetAll);
     
-    // Scenario with 3 orbiters:
-    // - satId 0/1 use TLE
-    // - satId 2 uses traced mobility from positions/sat_traces.txt
-    //
-    // runtask passes --scenarioPath=.../task/scenario (flat unpack). SimulationHelper only exposes
-    // LoadScenario(name) which resolves LocateDataDirectory()/scenarios/<name>. When scenarioPath is
-    // set, we symlink .../task/scenarios/<scenarioName> -> .../task/scenario and set DataPath to
-    // .../task (works without LoadScenarioDirectory, which may be absent in some satellite builds).
     simulationHelper->LoadScenario(scenarioName);
 
     simulationHelper->CreateSatScenario(SatHelper::NONE);
@@ -353,18 +351,17 @@ main(int argc, char* argv[])
     // PCAP for all nodes
     // ========================================================================
    
-    // PCAP for all nodes
     if (enablePcap)
     {
-    EnablePcapForNodeContainer(topology->GetGwNodes(),
-                              "sat-handover-gw", outputDir,
-                              "GW", enableHexDump);
-    EnablePcapForNodeContainer(topology->GetOrbiterNodes(),
-                               "sat-handover-orbiter", outputDir,
-                               "SAT", enableHexDump);
-    EnablePcapForNodeContainer(topology->GetUtNodes(),
-                               "sat-handover-ut", outputDir,
-                               "UT", enableHexDump);
+        EnablePcapForNodeContainer(topology->GetGwNodes(),
+                                  "sat-handover-gw", outputDir,
+                                  "GW", enableHexDump);
+        EnablePcapForNodeContainer(topology->GetOrbiterNodes(),
+                                   "sat-handover-orbiter", outputDir,
+                                   "SAT", enableHexDump);
+        EnablePcapForNodeContainer(topology->GetUtNodes(),
+                                   "sat-handover-ut", outputDir,
+                                   "UT", enableHexDump);
     }
 
     // ========================================================================
