@@ -34,6 +34,7 @@
 #include "ns3/satellite-enums.h"
 #include "../stats/device-ip-table.h"
 #include "../model/orbiter-trajectory-validation.h"
+#include "../helper/dynamics-schedule.h"
 #include "../stats/pcap-node-tracing.h"
 #include <chrono>
 #include <filesystem>
@@ -330,6 +331,14 @@ main(int argc, char* argv[])
 
     Ptr<SatTopology> topology = Singleton<SatTopology>::Get();
     ValidateOrbiterTrajectories(scenarioName, topology);
+
+    Ptr<DynamicsSchedule> dynamicsSchedule = CreateObject<DynamicsSchedule>();
+    const std::string schedulePath = scenarioLayoutRoot + "/dynamics/schedule.txt";
+    if (dynamicsSchedule->LoadFile(schedulePath))
+    {
+        dynamicsSchedule->Install(simulationHelper->GetSatelliteHelper()->GetAntennaGainPatterns(),
+                                  SystemPath::Append(outputDir, "dynamics-applied.txt"));
+    }
 
     // ========================================================================
     // Unified device-to-IP mapping table for all roles

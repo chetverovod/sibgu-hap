@@ -37,6 +37,7 @@
 #include "../stats/pcap-node-tracing.h"
 #include "../helper/lte-cellular-helper.h"
 #include "../helper/handover-guard.h"
+#include "../helper/dynamics-schedule.h"
 #include <chrono>
 #include <filesystem>
 #include <sstream>
@@ -347,6 +348,14 @@ main(int argc, char* argv[])
     handoverGuard->Install(topology,
                            simulationHelper->GetSatelliteHelper()->GetAntennaGainPatterns());
     // Ptr must outlive RunSimulation(): scheduled polls use a raw this pointer.
+
+    Ptr<DynamicsSchedule> dynamicsSchedule = CreateObject<DynamicsSchedule>();
+    const std::string schedulePath = scenarioLayoutRoot + "/dynamics/schedule.txt";
+    if (dynamicsSchedule->LoadFile(schedulePath))
+    {
+        dynamicsSchedule->Install(simulationHelper->GetSatelliteHelper()->GetAntennaGainPatterns(),
+                                  SystemPath::Append(outputDir, "dynamics-applied.txt"));
+    }
 
     LteCellularHelper lteCellular;
     if (enableLte)

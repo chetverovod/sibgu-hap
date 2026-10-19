@@ -17,6 +17,7 @@ build_lib(
                  helper/sibgu-hap-helper.cc
                  helper/lte-cellular-helper.cc
                  helper/handover-guard.cc
+                 helper/dynamics-schedule.cc
                  stats/device-ip-table.cc
                  stats/pcap-node-tracing.cc
     HEADER_FILES model/sibgu-hap.h
@@ -24,6 +25,7 @@ build_lib(
                  helper/sibgu-hap-helper.h
                  helper/lte-cellular-helper.h
                  helper/handover-guard.h
+                 helper/dynamics-schedule.h
                  helper/hapsimulator-utils.h
                  stats/device-ip-table.h
                  stats/pcap-node-tracing.h
