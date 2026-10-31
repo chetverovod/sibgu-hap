@@ -40,6 +40,8 @@
 #include "../helper/dynamics-schedule.h"
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -66,12 +68,17 @@ AddIssueIf(bool bad, const std::string& message, std::vector<std::string>& issue
 
 void
 ValidateCliInputs(float simulationDuration,
+                  float simulationStart,
                   float interval,
                   uint32_t packetSize,
                   const std::string& simsDir,
                   std::vector<std::string>& issues)
 {
     AddIssueIf(simulationDuration <= 0.0f, "simulationDuration must be > 0 (seconds).", issues);
+    AddIssueIf(simulationStart < 0.0f, "simulationStart must be >= 0 (seconds).", issues);
+    AddIssueIf(simulationStart >= simulationDuration,
+               "simulationStart must be less than simulationDuration.",
+               issues);
     AddIssueIf(interval <= 0.0f, "interval must be > 0 (milliseconds between CBR packets).", issues);
     AddIssueIf(packetSize == 0, "packetSize must be > 0.", issues);
     if (simsDir.empty())
@@ -206,6 +213,67 @@ FilterArgvForCommandLine(int argc,
 
 } // namespace
 
+std::string
+UtcFromJulianDate(double jd)
+{
+    const DateTime dt = JulianDate(jd).GetDateTime();
+    std::ostringstream oss;
+    oss << std::setfill('0') << std::setw(4) << dt.year << "-" << std::setw(2) << dt.month << "-"
+        << std::setw(2) << dt.day << " " << std::setw(2) << dt.hours << ":" << std::setw(2)
+        << dt.minutes << ":" << std::setw(2) << dt.seconds;
+    return oss.str();
+}
+
+void
+WriteStartDate(const std::string& scenarioRoot, double jdOrigin)
+{
+    const DateTime dt = JulianDate(jdOrigin).GetDateTime();
+    NS_ABORT_MSG_IF(dt.year < 1992 || dt.year > 2099,
+                    "jdOrigin " << jdOrigin << " is outside the supported UTC range 1992..2099");
+    const std::string path = scenarioRoot + "/positions/start_date.txt";
+    std::ofstream out(path, std::ios::trunc);
+    NS_ABORT_MSG_IF(!out, "Cannot write start date: " << path);
+    const std::string utc = UtcFromJulianDate(jdOrigin);
+    out << utc << "\n";
+    NS_LOG_UNCOND("[hapsimulator] jdOrigin " << jdOrigin << " -> " << path << " (" << utc << ")");
+}
+
+void
+StartDataCapture(Ptr<SimulationHelper> simulationHelper)
+{
+    if (Singleton<SatTopology>::Get()->GetUtUserNodes().GetN() > 0)
+    {
+        Ptr<SatTrafficHelper> traffic = simulationHelper->GetTrafficHelper();
+        traffic->InstallDefaultStatistics(SatTrafficHelper::FWD_LINK);
+        traffic->InstallDefaultStatistics(SatTrafficHelper::RTN_LINK);
+    }
+
+    Ptr<SatStatsHelperContainer> s = simulationHelper->GetStatisticsContainer();
+    s->AddPerSatFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerSatFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerSatRtnAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerSatRtnUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerBeamFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerBeamFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
+    s->AddPerBeamBeamServiceTime(SatStatsHelper::OUTPUT_SCALAR_FILE);
+
+    s->AddGlobalFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddGlobalRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederCrdsaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederCrdsaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederSlottedAlohaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerBeamFeederSlottedAlohaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddGlobalPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
+    s->AddPerIslPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
+
+    simulationHelper->GetSatelliteHelper()->EnablePacketTrace();
+    simulationHelper->EnableProgressLogs();
+    NS_LOG_UNCOND("[hapsimulator] Data capture started at simulation time "
+                  << Simulator::Now().GetSeconds() << " s");
+}
+
 // ============================================================================
 // main
 // ============================================================================
@@ -223,7 +291,9 @@ main(int argc, char* argv[])
     Config::SetDefault("ns3::SatGwMac::DisableSchedulingIfNoDeviceConnected", BooleanValue(true));
     Config::SetDefault("ns3::SatOrbiterMac::DisableSchedulingIfNoDeviceConnected", BooleanValue(true));
     Config::SetDefault("ns3::SatEnvVariables::EnableSimulationOutputOverwrite", BooleanValue(true));
-    Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(true));
+    // Трасса пакетов и статистика CBR включаются в StartDataCapture, с момента simulationStart.
+    Config::SetDefault("ns3::SatHelper::PacketTraceEnabled", BooleanValue(false));
+    Config::SetDefault("ns3::SatTrafficHelper::EnableDefaultStatistics", BooleanValue(false));
 
     std::string simsDir;
     std::string scenarioPath;
@@ -238,7 +308,9 @@ main(int argc, char* argv[])
     std::string simulationName = TEST_NAME;
     Ptr<SimulationHelper> simulationHelper = CreateObject<SimulationHelper>(simulationName);
 
-    float simulationDuration = 2.0; 
+    float simulationDuration = 2.0;
+    float dataCaptureStart = 0.0;
+    double jdOrigin = 0.0;
     std::string scenarioName = "constellation-leo-3-satellites-hap";
     uint32_t packetSize = 512; 
     float interval = 100.0; 
@@ -253,6 +325,12 @@ main(int argc, char* argv[])
     cmd.AddValue("trafficStep", "Time interval of traffic change, in seconds", trafficStep);
     cmd.AddValue("scenarioName", "Scenario name", scenarioName);
     cmd.AddValue("simulationDuration", "Simulation duration, in seconds", simulationDuration);
+    cmd.AddValue("simulationStart",
+                 "Simulation time when statistics, coordinates and the packet trace start, in seconds",
+                 dataCaptureStart);
+    cmd.AddValue("jdOrigin",
+                 "Julian date (UTC) of simulation time zero; written to positions/start_date.txt",
+                 jdOrigin);
     cmd.AddValue("enablePcap", "Enable PCAP", enablePcap);
     cmd.AddValue("enableHexDump", "Enable Hex-Dump", enableHexDump);
     cmd.AddValue("enableLte", "Enable LENA LTE eNB/UE from scenario/cellular/", enableLte);
@@ -261,7 +339,7 @@ main(int argc, char* argv[])
 
     {
         std::vector<std::string> issues;
-        ValidateCliInputs(simulationDuration, interval, packetSize, simsDir, issues);
+        ValidateCliInputs(simulationDuration, dataCaptureStart, interval, packetSize, simsDir, issues);
         PrintIssuesAndAbort(issues);
     }
 
@@ -331,7 +409,12 @@ main(int argc, char* argv[])
                                      61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72
                                    };
     simulationHelper->SetBeamSet(beamSetAll);
-    
+
+    if (jdOrigin > 0.0)
+    {
+        WriteStartDate(scenarioLayoutRoot, jdOrigin);
+    }
+
     simulationHelper->LoadScenario(scenarioName);
 
     simulationHelper->CreateSatScenario(SatHelper::NONE);
@@ -437,29 +520,14 @@ main(int argc, char* argv[])
     outputConfig.ConfigureDefaults();
 
     
-    // Statistics
-    Ptr<SatStatsHelperContainer> s = simulationHelper->GetStatisticsContainer();
-    s->AddPerSatFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
-    s->AddPerSatFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
-    s->AddPerSatRtnAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
-    s->AddPerSatRtnUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
-    s->AddPerBeamFwdAppThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
-    s->AddPerBeamFwdUserDevThroughput(SatStatsHelper::OUTPUT_SCATTER_FILE);
-    s->AddPerBeamBeamServiceTime(SatStatsHelper::OUTPUT_SCALAR_FILE);
-
-    // Packet loss and collision diagnostics
-    s->AddGlobalFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerBeamFwdUserDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddGlobalRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerBeamRtnFeederDaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerBeamFeederCrdsaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerBeamFeederCrdsaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerBeamFeederSlottedAlohaPacketCollision(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerBeamFeederSlottedAlohaPacketError(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddGlobalPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
-    s->AddPerIslPacketDropRate(SatStatsHelper::OUTPUT_SCALAR_FILE);
-
-    simulationHelper->EnableProgressLogs();
+    if (dataCaptureStart <= 0.0f)
+    {
+        StartDataCapture(simulationHelper);
+    }
+    else
+    {
+        Simulator::Schedule(Seconds(dataCaptureStart), &StartDataCapture, simulationHelper);
+    }
 
     NS_LOG_UNCOND("Configured simulator stop time (virtual): "
                   << simulationHelper->GetSimTime().GetSeconds() << " s");

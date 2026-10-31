@@ -676,8 +676,14 @@ LteCellularHelper::Install(const std::string& scenarioRoot,
 
     if (m_ueNodes.GetN() == 0)
     {
+        // EnableDlPhyTraces connects LteUePhy/ReportCurrentCellRsrpSinr.
+        // Config::Connect aborts when that path matches no UE.
+        // Строка Warning: совпадает с pipeline/warning_lines.py
+        // (EMPTY_LTE_SUBSCRIBER_WARNING) и попадает в отчёт из simulation.log.
         NS_LOG_UNCOND("[lte] No UE records; eNB installed without subscribers.");
-        EnableLenaTraces();
+        NS_LOG_UNCOND("Warning: список абонентов LTE пуст. "
+                      "Базовая станция установлена без user_equipment, "
+                      "трассы LENA не подключены.");
         return true;
     }
 
