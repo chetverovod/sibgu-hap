@@ -22,9 +22,13 @@ Run from `contrib/sibgu-hap/ext-utils`:
 python3 -m unittest discover -s tests -p "test_*.py"
 ```
 
-Run with coverage:
+Run with coverage (same as CI):
 
 ```bash
-python3 -m coverage run -m unittest discover -s tests -p "test_*.py" && python3 -m coverage report -m
+pip install -r requirements-ci.txt
+python3 -m coverage run -m unittest discover -s tests -p "test_*.py" -v
+python3 -m coverage report -m
 ```
+
+GitHub Actions workflow: `.github/workflows/ci.yml` (Python 3.11, `ext-utils` unit tests).
 

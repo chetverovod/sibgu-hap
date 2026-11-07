@@ -1,5 +1,7 @@
 # sibgu-hap
 
+[![CI](https://github.com/chetverovod/sibgu-hap/actions/workflows/ci.yml/badge.svg)](https://github.com/chetverovod/sibgu-hap/actions/workflows/ci.yml)
+
 Модуль ns-3 (contrib) для моделирования **HAP** (High-Altitude Platform) совместно со спутниковым стеком **SNS-3** (`contrib/satellite`).  
 Опционально подключает **LENA LTE** (eNB/UE) поверх той же сцены.
 
@@ -114,7 +116,7 @@ LTE включается флагом `--enableLte` или автоматиче�
 
 Покрывает: CLI-валидацию, парсинг cellular-конфигов, airborne trace mapping, пути LENA KPI, `HandoverGuard`, smoke-создание спутниковой топологии.
 
-Тесты Python-утилит — из `ext-utils/` (см. README там).
+Тесты Python-утилит — из `ext-utils/` (см. README там). На GitHub Actions (уровень 1) автоматически гоняются `unittest` + coverage для `ext-utils/` на push/PR в `dev` и `main`.
 
 ## Helpers (кратко)
 
