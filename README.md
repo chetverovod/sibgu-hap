@@ -102,7 +102,7 @@ LTE включается флагом `--enableLte` или автоматиче�
 
 ## Тесты
 
-Сюита ns-3: **`hapsimulator`**.
+Пакет для ns-3: **`hapsimulator`**.
 
 ```bash
 # быстрые unit-тесты
