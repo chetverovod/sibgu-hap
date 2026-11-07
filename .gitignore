@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Editor / OS
+*.swp
+.DS_Store
