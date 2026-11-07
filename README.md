@@ -5,10 +5,22 @@
 
 Автор: Igor Plastov (Reshetnev University) · репозиторий: [chetverovod/sibgu-hap](https://github.com/chetverovod/sibgu-hap).
 
+## Связь с netimport
+
+Модуль используется проектом **[netimport](https://github.com/chetverovod/netimport)** как исполняемый бэкенд симуляции.
+
+Типовой конвейер:
+
+1. **netimport** описывает сетевую топологию на предметном языке (**JSON**) и/или в виде графа (**DOT**).
+2. Конвейер собирает сценарий SNS-3 / `.tsk` (HAPS, спутники, GW/UT, опционально LTE `cellular/`).
+3. **sibgu-hap** (`hapsimulator`) выполняет симуляцию в ns-3.43 и пишет статистику.
+
+Иными словами: netimport готовит задачу из JSON/DOT; этот модуль её прогоняет.
+
 ## Возможности
 
 - Сценарии SNS-3 с HAP-носителями (траектории, лучи, handover).
-- Пример `hapsimulator` — основной entry point для пакетных прогонов.
+- Пример `hapsimulator` — основной entry point для пакетных прогонов (в т.ч. задач из netimport).
 - `LteCellularHelper` — установка LENA eNB/UE из `scenario/cellular/` (airborne-устройства делят mobility с HAP/orbiter; EPC к SNS-3 GW).
 - `HandoverGuard` — защита от abort SNS-3 при потере покрытия (без правок satellite-модуля).
 - `DynamicsSchedule` — применение расписания синтеза (beam stepping и др.) во время симуляции.
