@@ -16,6 +16,7 @@
 // Подключаем наши вынесенные утилиты (путь может отличаться в зависимости от вашей структуры)
 #include "../helper/hapsimulator-utils.h"
 #include "../helper/handover-guard.h"
+#include "../helper/dynamics-schedule.h"
 #include "../helper/lte-cellular-helper.h"
 #include "ns3/geo-coordinate.h"
 
@@ -346,6 +347,48 @@ private:
  * \ingroup satellite
  * \brief Тестовый сьют, объединяющий все тесты hapsimulator (с учетом синтаксиса ns-3.43)
  */
+class DynamicsScheduleParseTestCase : public TestCase
+{
+  public:
+    DynamicsScheduleParseTestCase()
+        : TestCase("Test synthesis schedule file parsing")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        const std::string path = "sibgu-dynamics-schedule-test.txt";
+        {
+            std::ofstream out(path);
+            out << "# comment\n";
+            out << "meta t_start_s 0 t_end_s 100 n_samples 3 dt_s 50 jd0 1\n";
+            out << "beam 4 10 20 BEAM-A\n";
+            out << "event 50 4 - - 1.5e9 1e6\n";
+            out << "event 100 4 12.5 30.25 - -\n";
+        }
+
+        Ptr<DynamicsSchedule> schedule = CreateObject<DynamicsSchedule>();
+        NS_TEST_ASSERT_MSG_EQ(schedule->LoadFile("missing-dynamics-schedule.txt"),
+                              false,
+                              "Missing schedule should be ignored");
+        NS_TEST_ASSERT_MSG_EQ(schedule->LoadFile(path), true, "Schedule should load");
+        NS_TEST_ASSERT_MSG_EQ(schedule->Events().size(), 2, "Two events");
+        NS_TEST_ASSERT_MSG_EQ(schedule->Events()[0].hasPointing, false, "Frequency-only row");
+        NS_TEST_ASSERT_MSG_EQ(schedule->Events()[0].hasCarrier, true, "Carrier present");
+        NS_TEST_ASSERT_MSG_EQ_TOL(schedule->Events()[0].freqHz, 1.5e9, 1.0, "Frequency Hz");
+        NS_TEST_ASSERT_MSG_EQ(schedule->Events()[1].hasPointing, true, "Pointing row");
+        NS_TEST_ASSERT_MSG_EQ_TOL(schedule->Events()[1].latDeg, 12.5, 1e-9, "Target latitude");
+        const DynamicsBeamRef* ref = schedule->FindBeam(4);
+        NS_TEST_ASSERT_MSG_NE(ref, nullptr, "Beam reference stored");
+        NS_TEST_ASSERT_MSG_EQ_TOL(ref->latDeg - schedule->Events()[1].latDeg,
+                                 -2.5,
+                                 1e-9,
+                                 "Pointing shift is pattern peak minus target");
+        std::filesystem::remove(path);
+    }
+};
+
 class HapSimulatorTestSuite : public TestSuite
 {
 public:
@@ -359,6 +402,7 @@ public:
         AddTestCase (new LteAirborneTraceMatchTestCase, TestCase::Duration::QUICK);
         AddTestCase (new LteLenaTraceOutputTestCase, TestCase::Duration::QUICK);
         AddTestCase (new HandoverGuardConstructTestCase, TestCase::Duration::QUICK);
+        AddTestCase (new DynamicsScheduleParseTestCase, TestCase::Duration::QUICK);
         
         // Используем TestCase::Duration::EXTENSIVE для интеграционного теста
         AddTestCase (new TopologyCreationSmokeTestCase, TestCase::Duration::EXTENSIVE);
